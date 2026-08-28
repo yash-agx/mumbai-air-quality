@@ -38,6 +38,12 @@ VALID_RANGE = (0.0, 1000.0)
 #
 #   borivali_east  6965    Borivali East - MPCB          19.22747, 72.86439
 #                  11606   Borivali East - IITM          19.23241, 72.86895  ~640 m
+#
+#   worli          3409323 Worli - MPCB                  18.99362, 72.81281
+#                  6959    Siddharth Nagar-Worli - IITM  19.00008, 72.81399  ~730 m
+#
+#   ulhasnagar     3409484 Sidhi Vinayak Nagar - MPCB    19.23558, 73.15912
+#                  6258871 Vithalwadi - MPCB             19.23076, 73.15519  ~680 m
 # --------------------------------------------------------------------------
 CV_STATION_GROUPS = {
     3409328: "bandra_east",
@@ -45,10 +51,32 @@ CV_STATION_GROUPS = {
     7850: "bandra_east",
     6965: "borivali_east",
     11606: "borivali_east",
+    3409323: "worli",
+    6959: "worli",
+    3409484: "ulhasnagar",
+    6258871: "ulhasnagar",
 }
 
 # Warn if any ungrouped pair is closer than this.
 PROXIMITY_WARN_KM = 1.0
+
+# --------------------------------------------------------------------------
+# EXCLUDED STATIONS
+#
+#   8039  "Mumbai"  19.07283, 72.88261
+#     294 readings over an 18-month window (2.2% coverage) around a single
+#     12,764 h hole, and a bare city name where every other station carries a
+#     site and an agency -- so it cannot be matched to a real monitoring site
+#     or grouped against its neighbours. It can neither inform an
+#     interpolation nor serve as a held-out station, so it is dropped outright
+#     instead of being carried as a mostly-empty row.
+# --------------------------------------------------------------------------
+EXCLUDE_STATIONS = {8039}
+
+# A sensor stuck on one reading repeats it hour after hour. Runs are measured
+# in unbroken hours: an outage ends a run, because a station reading 41.0
+# before a two-week silence and 41.0 after it was not stuck for two weeks.
+STUCK_RUN_HOURS = 24
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -67,12 +95,46 @@ def split_name(name):
     return (site.strip(), agency.strip()) if sep else (name.strip(), "")
 
 
+def run_lengths(df):
+    """Length, in unbroken hours, of the identical-value run each row sits in.
+
+    df must be sorted by station then timestamp. A run continues only while the
+    next row is the same station, the very next hour, and the same value, so a
+    missing hour splits a run rather than bridging it.
+    """
+    same_station = df["station_id"].eq(df["station_id"].shift())
+    next_hour = df["timestamp"].diff().dt.total_seconds().eq(3600)
+    same_value = df["value"].eq(df["value"].shift())
+    run_id = (~(same_station & next_hour & same_value)).cumsum()
+    return df.groupby(run_id)["value"].transform("size")
+
+
+def stuck_cost(df, lengths, stuck):
+    """Per-station tally of what the stuck mask removes."""
+    if not stuck.any():
+        return pd.DataFrame(columns=["station_id", "site", "masked_h",
+                                     "longest_run_h", "of_obs", "pct"])
+    obs = df.groupby("station_id").size()
+    hit = df.loc[stuck, ["station_id", "site"]].assign(run=lengths[stuck])
+    cost = (hit.groupby(["station_id", "site"])
+               .agg(masked_h=("run", "size"), longest_run_h=("run", "max"))
+               .reset_index())
+    cost["of_obs"] = cost["station_id"].map(obs)
+    cost["pct"] = (100 * cost["masked_h"] / cost["of_obs"]).round(1)
+    return cost.sort_values("masked_h", ascending=False)
+
+
 def clean(raw):
     n0 = len(raw)
     report = {}
 
     df = raw.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+
+    excluded = df["station_id"].isin(EXCLUDE_STATIONS)
+    report["excluded"] = int(excluded.sum())
+    report["excluded_ids"] = sorted(set(df.loc[excluded, "station_id"]))
+    df = df[~excluded]
 
     report["flagged"] = int(df["flagged"].sum())
     df = df[~df["flagged"]].drop(columns=["flagged"])
@@ -104,9 +166,20 @@ def clean(raw):
     df["cv_group"] = df["station_id"].map(CV_STATION_GROUPS).fillna(
         df["station_id"].astype(str))
 
+    df = df.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
+
+    # Mask stuck runs rather than dropping the station: the rest of the series
+    # is usable, and a masked hour is just a missing hour, which the pipeline
+    # already handles everywhere else.
+    lengths = run_lengths(df)
+    stuck = lengths >= STUCK_RUN_HOURS
+    report["stuck_masked"] = int(stuck.sum())
+    report["stuck"] = stuck_cost(df, lengths, stuck)
+    df = df[~stuck]
+
     report["rows_in"] = n0
     report["rows_out"] = len(df)
-    return df.sort_values(["station_id", "timestamp"]).reset_index(drop=True), report
+    return df.reset_index(drop=True), report
 
 
 def per_station(df):
@@ -118,8 +191,6 @@ def per_station(df):
         g = g.sort_values("timestamp")
         # Hours absent between consecutive readings, so an unbroken series is 0.
         gaps = g["timestamp"].diff().dt.total_seconds().div(3600).sub(1)
-        # Longest run of consecutive identical readings -- a stuck sensor.
-        same = (g["value"] != g["value"].shift()).cumsum()
         rows.append({
             "station_id": sid,
             "site": g["site"].iloc[0],
@@ -132,7 +203,8 @@ def per_station(df):
             "first": g["timestamp"].min().date(),
             "last": g["timestamp"].max().date(),
             "max_gap_h": int(gaps.max()) if len(g) > 1 else 0,
-            "stuck_run_h": int(g.groupby(same).size().max()),
+            # Post-mask, so this is always < STUCK_RUN_HOURS.
+            "stuck_run_h": int(run_lengths(g).max()),
         })
     return pd.DataFrame(rows).sort_values("coverage_pct", ascending=False), window_hours
 
@@ -174,12 +246,16 @@ def main():
     print(f"                {window_hours:,} hours, {len(stations)} stations, "
           f"{df['cv_group'].nunique()} CV groups")
     print(f"\nrows in         {rep['rows_in']:,}")
+    print(f"  excluded stn  -{rep['excluded']:,}   "
+          f"(station {', '.join(map(str, rep['excluded_ids']))}, see EXCLUDE_STATIONS)")
     print(f"  QA-flagged    -{rep['flagged']:,}")
     print(f"  null value    -{rep['null']:,}")
     print(f"  out of range  -{rep['out_of_range']:,}   "
           f"(outside {VALID_RANGE[0]}-{VALID_RANGE[1]} ug/m3)")
     print(f"  dup hours     -{rep['duplicate_hours']:,}   "
           f"(overlapping sensors, averaged)")
+    print(f"  stuck runs    -{rep['stuck_masked']:,}   "
+          f"(one value repeated {STUCK_RUN_HOURS}h+ unbroken, masked)")
     print(f"rows out        {rep['rows_out']:,}")
 
     possible = window_hours * len(stations)
@@ -221,11 +297,19 @@ def main():
         for r in offline.itertuples():
             print(f"  {r.max_gap_h:>5} h   {r.site} [{r.station_id}]")
 
-    stuck = stations[stations["stuck_run_h"] >= 24]
-    if not stuck.empty:
-        print("\nStations repeating one value for 24h+ (suspect, NOT dropped):")
-        for r in stuck.itertuples():
-            print(f"  {r.stuck_run_h:>5} h   {r.site} [{r.station_id}]")
+    cost = rep["stuck"]
+    if not cost.empty:
+        print(f"\nStuck-run mask: {rep['stuck_masked']:,} readings removed from "
+              f"{len(cost)} of {len(stations)} stations. The station is kept; the")
+        print(f"masked hours become missing hours. "
+              f"(longest = longest unbroken stuck run found)")
+        print(f"  {'masked':>6} {'of obs':>7} {'':>6}  {'longest':>7}   station")
+        for r in cost.itertuples():
+            print(f"  {r.masked_h:>6,} {r.of_obs:>7,} {r.pct:>5.1f}%  "
+                  f"{r.longest_run_h:>5} h   {r.site} [{r.station_id}]")
+        print(f"  {cost['masked_h'].sum():>6,}   total")
+    else:
+        print(f"\nNo station repeats a value for {STUCK_RUN_HOURS}h+ of unbroken hours.")
 
     print(f"\nWrote {len(df):,} rows to {CLEAN_PATH.relative_to(ROOT)}")
 
