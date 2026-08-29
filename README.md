@@ -2,7 +2,7 @@
 
 Interactive map of PM2.5 across the Mumbai metropolitan region, interpolating between the region's sparse ground monitors to estimate air quality at locations that have none. It shows current CPCB readings by default and can be rewound to any hour in an 18-month history.
 
-**Live app:** _not yet deployed — replace with the share.streamlit.app URL after the first deploy_
+**Live app:** https://mumbai-air-quality.streamlit.app
 **Repository:** https://github.com/yash-agx/mumbai-air-quality
 
 ![The dashboard: interpolated PM2.5 surface over the Mumbai region, monitor locations, and the mask over areas the model will not estimate](reports/figures/app.png)
