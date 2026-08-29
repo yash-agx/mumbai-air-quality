@@ -49,6 +49,35 @@ Two caveats on the table. The nearest bin rests on only 10 pairs, and those are 
 
 ---
 
+## For the README: the monitor network is sited unlike the city it measures
+
+81% of the Mumbai bounding box is masked as outside the training range. Worth stating plainly on the README, because the reason is not what it first looks like.
+
+**The mask is mostly emptiness, not density.** Cells fail the band overwhelmingly by falling *below* it:
+
+| feature | cells below the training minimum |
+|---|---|
+| building_density_500m | 75.1% |
+| road_density_500m | 43.3% |
+| road_density_1km | 39.8% |
+
+The bounding box is a rectangle over a coastal city: Arabian Sea, Sanjay Gandhi National Park, Thane creek, rural land east of Kalyan. 37% of cells contain no mapped roads *and* no mapped buildings at all. Masking those is correct and uninteresting.
+
+**The real finding is the direction of the siting bias.** Monitors sit in places notably denser and busier than the city's typical inhabited ground:
+
+| | stations | typical inhabited cell |
+|---|---|---|
+| building density (median) | 244.5 /km² | 90.4 /km² |
+| road density 500 m (median) | 18.3 km/km² | 7.6 km/km² |
+
+Stations sit at roughly 2.7× the building density of ordinary inhabited land, and the densest station lands at the 98th percentile of inhabited cells. The other half of the mask says the same thing from the other side: 51% of cells are farther from a major road than any station is, and 50% are farther from industry. Monitoring sites cluster near roads and industrial land, which is presumably deliberate — that is where the regulatory interest is.
+
+**Consequence to state honestly.** The model is trained on busy, road-adjacent, industry-adjacent locations and asked to predict everywhere. Where it extrapolates, it is mostly extrapolating *downward* — into quieter, greener, lower-traffic ground it has never seen. Any claim about a calm residential pocket rests on stations that are systematically busier than it. Nothing in the CV score speaks to that, because every held-out station is itself one of these busy sites.
+
+**What is not a problem:** only 1.6% of inhabited cells (23 of 1,410) are denser than the densest station. Mumbai's dense neighbourhoods are, with few exceptions, inside the training range. The gap is at the quiet end, not the crowded end.
+
+---
+
 ## Decisions already made
 
 **18-month window over 5-year window.** 40 live stations with ~18 months of history beats 14 stations with 5 years. Spatial density matters more than history depth for interpolation, and leave-one-station-out CV is only meaningful with enough stations. Still covers two winters, which is Mumbai's peak pollution season.
@@ -84,7 +113,22 @@ Two traps found while getting there, worth remembering:
 - *Tune the baseline or the comparison is worthless.* The conventional 1/d² is not IDW's best power here; with p=2 kriging appeared to win by 2.4%, and with the power chosen per fold IDW wins instead.
 - *Tuning needs the group structure too.* Selecting the IDW power by predicting each training station from the others let `bandra_east`'s 70 m partner leak in. The inner split has to drop whole groups, same as the outer one.
 
-**A few extreme readings still survive the artefact screen.** 113 readings above 500 µg/m³ remain, kept because the city median cleared 50 that hour. Some are clearly real (Mulund West at 1000 while the city median was 211 — a genuine October episode); others clear the bar narrowly while sitting 15–18× above the city median (Kopripada-Vashi at 979 against a median of 53.8). Tightening the corroboration to a *ratio* rather than a floor would catch those. Not done — the current rule is the one specified, and the residual is small.
+**Settled: the extrapolation band is min–max, not p01–p99.** `predict_surface(..., band=("p01","p99"))` still switches it.
+
+With only 39 stations, p01 sits just above the minimum, so a station holding the minimum on any one of six features falls outside its own band. Nine did — the airport, Powai, Worli, BKC, Kasarvadavali, Kalamboli and three others — meaning the mask shaded locations where we hold ground truth. min–max excludes none of them and costs 1.4 points of grid coverage (81.3% masked against 82.7%). The case for p01–p99 is robustness to one freak station, which is worth something at a few hundred stations and not much at thirty-nine.
+
+**OPEN: 113 readings above 500 µg/m³ survive the artefact screen.** Deliberately left as-is for now; revisit if the error bars look wrong at the top of the range.
+
+They are kept because the city median cleared 50 µg/m³ that hour, which is the rule as specified. Some are clearly genuine — Mulund West at 1000 while the city median was 211, with Upvan Fort at 989 in the same hour, a real October 2025 episode. Others clear the bar only narrowly while sitting 15–18× above the city median:
+
+| station | value | city median that hour |
+|---|---|---|
+| Kopripada-Vashi | 979 | 53.8 |
+| Kopripada-Vashi | 964 | 51.4 |
+| Sion | 891 | 57.0 |
+| Shivaji Nagar | 856 | 61.4 |
+
+The current rule is a *floor* on the regional median. A *ratio* test — flag when a reading exceeds, say, 8× the same-hour median across other stations — would catch these while still keeping the genuine episodes, where the whole basin rises together. Worth doing if the top of the uncertainty band looks unreliable, since these sit in the highest-prediction bin where sigma is already largest (~45 µg/m³).
 
 **Stuck sensors.** Several stations repeat one value for 24+ hours (Khadakpada 456h, Mulund West 211h). Currently masked rather than dropped. Worth checking whether masking changes results materially.
 
