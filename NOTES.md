@@ -107,6 +107,14 @@ Corroboration does the work, so a genuinely high reading the city agrees with su
 
 ## Open questions
 
+**BLOCKED: the live view needs the data.gov.in key authorised for dataset access.** Everything around it is built and tested; it simply cannot fetch.
+
+`DATAGOV_API_KEY` in `.env` is a valid key — `https://api.data.gov.in/lists` returns 200 and reports 285,974 resources — but every `/resource/{id}` call returns `403 {"error": "Key not authorised"}`, including the CPCB feed `3b01bcb8-0b14-4abf-b6f2-c1bfd384ba69` (which is live, `active=1`). Tested against four different resource ids; all 403. So it is the key's access level, not the resource id.
+
+**To fix:** sign in at data.gov.in, open My Account, and generate or activate an API key with resource access. No code change needed — `data/live.py` reads it from `.env` and the app switches to live automatically.
+
+**Why OpenAQ cannot stand in.** The obvious fallback is the source Phase 1 already uses, but it republishes CPCB on a lag: measured at **63.5 hours** behind for these stations (newest reading 27 Aug 02:30 UTC against a 29 Aug clock), with zero readings inside three hours. Its `/parameters/2/latest` endpoint also ignores `bbox`, `coordinates`+`radius` and every other spatial filter, returning the same global 1,000 rows regardless. Per-location calls do work — 39 of them run concurrently in ~5 s, inside the 60/min free tier — but return those same two-day-old numbers, so it would be a live-looking view of stale data. Not shipped.
+
 **Do engineered land-use features actually beat kriging?** ~~Unknown~~ **Answered: no, and neither beats IDW.** Under leave-one-group-out CV, a properly tuned IDW baseline wins; kriging and gradient-boosted trees on the OSM features both lose to it, and every method is within ~1.7% of simply averaging the reporting stations. The variogram above explains why. The modest honest result is the deliverable — this is it.
 
 Two traps found while getting there, worth remembering:
