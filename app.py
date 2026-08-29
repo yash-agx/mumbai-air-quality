@@ -476,13 +476,17 @@ _when = ("right now" if live_ok
          else f"{ts.tz_convert(TZ):%d %b %Y, %H:%M}")
 st.markdown(f"#### Air quality across Mumbai, {_when}")
 if relative:
+    # Plain markdown, no inline HTML. A <span> in the middle of a paragraph is
+    # inline HTML, which the markdown renderer escapes and prints as literal
+    # tags; the block-level <div> in the legend below is treated as an HTML
+    # block and does render. The colour bar under the map carries the mapping
+    # anyway, so the words alone are enough here.
     st.markdown(
         f"Colours compare each area with the citywide middle for this hour "
-        f"(**AQI {centre_aqi}, {centre_cat}**) - "
-        f"<span style='color:#1c5cab'><b>blue is cleaner</b></span> than the rest "
-        f"of the city, <span style='color:#a02524'><b>red is dirtier</b></span>. "
-        f"Grey areas are ones we cannot put a number on, because they look "
-        f"nothing like anywhere we have a monitor.", unsafe_allow_html=True)
+        f"(**AQI {centre_aqi}, {centre_cat}**). **Blue is cleaner** than the "
+        f"rest of the city, **red is dirtier**. Grey areas are ones we cannot "
+        f"put a number on, because they look nothing like anywhere we have a "
+        f"monitor.")
 else:
     st.markdown(
         "Darker blue means more PM2.5 on a fixed scale, so a colour means the "
