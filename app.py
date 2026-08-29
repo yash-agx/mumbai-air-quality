@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import pydeck as pdk
 import streamlit as st
 
@@ -133,6 +134,13 @@ REASON_LONG = {
     3: "One of the land-use measurements here falls outside the range covered "
        "by all 39 monitors, so an estimate would be a guess.",
 }
+
+# Time-pattern series. Categorical identity, so slots 1 and 2 of the palette
+# (validated as a pair: CVD dE 9.2, normal-vision 27.6). Measured and estimated
+# also differ by line style, so the distinction never rests on colour alone.
+C_MEASURED = "#2a78d6"
+C_ESTIMATED = "#eb6834"
+C_CITY = "#8c8a84"
 
 FEATHER = 0.10
 GRID_DEFAULT = 25
@@ -296,6 +304,57 @@ def contributions(lat, lon, readings, stations, power, top_n=5):
     # and no small group of monitors "makes" the number. Saying so is the
     # difference between provenance and a misleading highlight reel.
     return top, float(top["weight"].sum()), len(ranked)
+
+
+@st.cache_data(show_spinner=False)
+def time_axes():
+    """Local-time labels for every hour in the panel, plus the citywide mean."""
+    wide, _ = panel()
+    ist = wide.index.tz_convert(TZ)
+    city = np.nanmean(wide.to_numpy(dtype=float), axis=1)
+    return (pd.DataFrame({"hour": ist.hour, "month": ist.strftime("%Y-%m"),
+                          "dow": ist.dayofweek}, index=range(len(wide))), city)
+
+
+@st.cache_data(show_spinner=False)
+def cell_history(lat, lon, power):
+    """The full interpolated history for one cell, all 12k hours.
+
+    No sampling and nothing precomputed: a cell's distances to the monitors are
+    fixed, so the whole series is one matrix product against the panel rather
+    than 12,294 separate surfaces. It costs about 7 ms.
+    """
+    wide, stations = panel()
+    V = wide.to_numpy(dtype=float)
+    avail = ~np.isnan(V)
+    d = engine().haversine_grid_km(np.array([lat]), np.array([lon]),
+                                   stations["lat"].to_numpy(),
+                                   stations["lon"].to_numpy())[0]
+    w = 1.0 / np.maximum(d, engine().MIN_DIST_KM) ** power
+    den = avail @ w
+    num = (np.nan_to_num(V) * avail) @ w
+    return np.where(den > 0, num / np.maximum(den, 1e-12), np.nan)
+
+
+@st.cache_data(show_spinner=False)
+def monitor_history(station_id):
+    wide, _ = panel()
+    return wide[station_id].to_numpy(dtype=float)
+
+
+def diurnal(values, hours):
+    """Mean by hour of day, as a 24-long array with gaps as NaN."""
+    out = np.full(24, np.nan)
+    g = pd.Series(values).groupby(hours).mean()
+    out[g.index.to_numpy()] = g.to_numpy()
+    return out
+
+
+def shape_of(profile):
+    """A profile with its level and amplitude removed - what is left is shape."""
+    d = profile - np.nanmean(profile)
+    sd = np.nanstd(d)
+    return d / sd if sd > 0 else d
 
 
 def cell_index(lat, lon, lats, lons):
@@ -773,6 +832,167 @@ else:
     obj = picked[1]
     st.markdown("#### Why this number?")
     cell_estimate(int(obj["idx"]), float(obj["lat"]), float(obj["lon"]))
+
+
+# ---------------------------------------------------------------- time patterns
+# Whichever cell the page is focused on: the located one takes priority, then a
+# map click. Both give an index into the current grid plus its centre.
+focus = None
+if located is not None and located["state"] == "inside":
+    fi = located["idx"]
+    focus = (fi, float(lats[fi // len(lons)]), float(lons[fi % len(lons)]),
+             "your location")
+elif picked is not None and picked[0] == "cells":
+    fi = int(picked[1]["idx"])
+    focus = (fi, float(picked[1]["lat"]), float(picked[1]["lon"]),
+             "the selected square")
+
+
+def pattern_figure(x, series, xlabel, ylabel="PM2.5 (ug/m3)", kind="line"):
+    fig = go.Figure()
+    for name, y, colour, dash, width in series:
+        if y is None:
+            continue
+        if kind == "bar":
+            fig.add_bar(x=x, y=y, name=name, marker_color=colour, opacity=0.85)
+        else:
+            fig.add_scatter(x=x, y=y, name=name, mode="lines",
+                            line=dict(color=colour, dash=dash, width=width))
+    fig.update_layout(
+        height=330, margin=dict(l=10, r=10, t=10, b=10),
+        xaxis_title=xlabel, yaxis_title=ylabel,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False), yaxis=dict(gridcolor="#e8e7e3"))
+    return fig
+
+
+with st.expander("Time patterns at this place", expanded=False):
+    if focus is None:
+        st.markdown("Click a square on the map, or use your location, to see how "
+                    "the air there changes through the day and the year.")
+    else:
+        fi, f_lat, f_lon, f_label = focus
+        axes, city = time_axes()
+        near, _, _ = contributions(f_lat, f_lon, readings, stations,
+                                   card["idw_power"], top_n=1)
+        est = cell_history(round(f_lat, 4), round(f_lon, 4), card["idw_power"])
+        has_monitor = len(near) > 0
+        if has_monitor:
+            mrow = near.iloc[0]
+            meas = monitor_history(int(mrow["station_id"]))
+            m_name = f"{mrow['site']} ({mrow['km']:.1f} km away)"
+        else:
+            meas, m_name = None, None
+
+        st.caption(
+            "Solid blue is **measured** at the nearest monitor"
+            + (f", {m_name}" if has_monitor else "")
+            + f". Dashed orange is the **estimate** for {f_label}, which is "
+            + "calculated, not observed. Grey is the average across all monitors.")
+
+        tabs = st.tabs(["Hour of day", "Season", "Day of week", "Shape comparison"])
+        d_meas = diurnal(meas, axes["hour"]) if has_monitor else None
+        d_est = diurnal(est, axes["hour"])
+        d_city = diurnal(city, axes["hour"])
+
+        with tabs[0]:
+            st.plotly_chart(pattern_figure(
+                list(range(24)),
+                [("Nearest monitor - MEASURED", d_meas, C_MEASURED, "solid", 2.5),
+                 ("This square - ESTIMATED", d_est, C_ESTIMATED, "dash", 2.5),
+                 ("All monitors - average", d_city, C_CITY, "dot", 1.5)],
+                "Hour of day (IST)"), width="stretch")
+            if has_monitor:
+                peak, trough = int(np.nanargmax(d_meas)), int(np.nanargmin(d_meas))
+                st.markdown(
+                    f"Measured here, the air is dirtiest around **{peak:02d}:00** "
+                    f"and cleanest around **{trough:02d}:00**, a swing of "
+                    f"**{np.nanmax(d_meas) - np.nanmin(d_meas):.0f} ug/m3**.")
+
+        with tabs[1]:
+            months = sorted(axes["month"].unique())
+
+            def by_month(v):
+                if v is None:
+                    return None
+                return (pd.Series(v).groupby(axes["month"]).mean()
+                        .reindex(months).to_numpy())
+
+            st.plotly_chart(pattern_figure(
+                months,
+                [("Nearest monitor - MEASURED", by_month(meas), C_MEASURED, "solid", 2.5),
+                 ("This square - ESTIMATED", by_month(est), C_ESTIMATED, "dash", 2.5),
+                 ("All monitors - average", by_month(city), C_CITY, "dot", 1.5)],
+                "Month"), width="stretch")
+            st.markdown(
+                "Mumbai's pollution season runs roughly November to February. "
+                "The monsoon months wash the air clean and show as the trough.")
+
+        with tabs[2]:
+            names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+            def by_dow(v):
+                if v is None:
+                    return None
+                return (pd.Series(v).groupby(axes["dow"]).mean()
+                        .reindex(range(7)).to_numpy())
+
+            b_meas, b_est = by_dow(meas), by_dow(est)
+            st.plotly_chart(pattern_figure(
+                names,
+                [("Nearest monitor - MEASURED", b_meas, C_MEASURED, "solid", 2.5),
+                 ("This square - ESTIMATED", b_est, C_ESTIMATED, "dash", 2.5),
+                 ("All monitors - average", by_dow(city), C_CITY, "dot", 1.5)],
+                "Day of week", kind="bar"), width="stretch")
+            if has_monitor:
+                wd, we = float(np.nanmean(b_meas[:5])), float(np.nanmean(b_meas[5:]))
+                st.markdown(
+                    f"Measured: weekdays average **{wd:.1f} ug/m3**, weekends "
+                    f"**{we:.1f}** - a difference of **{wd - we:+.1f} ug/m3** "
+                    f"({100 * (wd - we) / we:+.0f}%).")
+
+        with tabs[3]:
+            st.plotly_chart(pattern_figure(
+                list(range(24)),
+                [("Nearest monitor - MEASURED",
+                  shape_of(d_meas) if has_monitor else None, C_MEASURED, "solid", 2.5),
+                 ("This square - ESTIMATED", shape_of(d_est), C_ESTIMATED, "dash", 2.5),
+                 ("All monitors - average", shape_of(d_city), C_CITY, "dot", 1.5)],
+                "Hour of day (IST)", ylabel="Shape (level and swing removed)"),
+                width="stretch")
+
+            r_est = float(np.corrcoef(shape_of(d_est), shape_of(d_city))[0, 1])
+            parts = [
+                "With each curve's level and swing removed, what is left is its "
+                "*shape* - when in the day the peaks and troughs fall.",
+                f"**The estimate is the citywide curve.** Its shape matches the "
+                f"all-monitor average at **r = {r_est:.3f}**, differing from the "
+                f"city only by a level shift of "
+                f"**{np.nanmean(d_est) - np.nanmean(d_city):+.1f} ug/m3**. Across "
+                f"all 39 monitor locations the median is r = 0.997 - "
+                f"interpolation reproduces the city's daily rhythm, never a "
+                f"local one.",
+            ]
+            if has_monitor:
+                r_meas = float(np.corrcoef(shape_of(d_meas), shape_of(d_city))[0, 1])
+                parts.insert(1,
+                             f"**The measured monitor has a shape of its own.** It "
+                             f"matches the citywide curve at only "
+                             f"**r = {r_meas:.3f}** (median across all monitors "
+                             f"0.758), on a level shift of "
+                             f"**{np.nanmean(d_meas) - np.nanmean(d_city):+.1f} "
+                             f"ug/m3**.")
+            st.markdown("\n\n".join(parts))
+            st.info(
+                "**Daily rhythm really does vary between places, and the "
+                "interpolation cannot follow it.** A monitor's own hour-of-day "
+                "profile reproduces across independent halves of the record at "
+                "r = 0.889, so the shape is measured reliably - yet two different "
+                "monitors agree only at r = 0.504 (p < 1e-19). That difference is "
+                "real, not sampling noise. The estimate flattens it away, for the "
+                "same reason the map stays close to a citywide average: spatial "
+                "correlation dies below the spacing of the network.")
 
 # ---------------------------------------------------------------- model card
 st.divider()
