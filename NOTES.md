@@ -121,6 +121,25 @@ Two traps found while getting there, worth remembering:
 - *Tune the baseline or the comparison is worthless.* The conventional 1/d² is not IDW's best power here; with p=2 kriging appeared to win by 2.4%, and with the power chosen per fold IDW wins instead.
 - *Tuning needs the group structure too.* Selecting the IDW power by predicting each training station from the others let `bandra_east`'s 70 m partner leak in. The inner split has to drop whole groups, same as the outer one.
 
+**Settled: a grid cell containing a monitor is always in-range, whatever its features say.**
+
+The mask exists to flag locations with no comparable training data. A cell with a monitor standing in it has ground truth by definition, so refusing to estimate there is incoherent — and it was happening: **11 of 39 monitors sat in masked cells**, including Bandra Kurla Complex, the airport, Powai and Andheri East. Press "Use my location" while standing at BKC and the app said it could not estimate, with a monitor 600 m away.
+
+The cause is two things compounding. The mask is evaluated at the *cell centre*, which at 2.3 km cells can sit most of a kilometre from the monitor; and a min–max band has no tolerance at its own edge. BKC's cell was excluded for `road_density_500m` of **28.99 against a training maximum of 28.98** — a margin of 0.035%. That is a rounding-scale difference, not extrapolation.
+
+Deliberately *not* fixed with a percentage tolerance. Any figure would be arbitrary, chosen to make this case pass, and would need re-defending every time a cell landed just outside it. The monitor rule is defensible from first principles instead.
+
+Effect on coverage — small, and smaller at finer resolutions, because a smaller cell puts its centre closer to the monitor:
+
+| grid | cell size | masked before | masked after | cells freed |
+|---|---|---|---|---|
+| 15×15 | 3.8 km | 82.7% | 77.3% | 12 |
+| 25×25 | 2.3 km | 81.3% | **79.8%** | 9 |
+| 40×40 | 1.4 km | 81.2% | 80.9% | 4 |
+| 60×60 | 0.9 km | 81.4% | 81.2% | 6 |
+
+39 monitors occupy 32 distinct cells at the default resolution — the near-coincident CV pairs share one. After the change, 0 of 39 monitors sit in a masked cell at any of the four resolutions. Implemented in `clear_station_cells()`, applied both when baking `grid_masks.npz` and on the un-baked fallback path so the two cannot disagree.
+
 **Settled: the extrapolation band is min–max, not p01–p99.** `predict_surface(..., band=("p01","p99"))` still switches it.
 
 With only 39 stations, p01 sits just above the minimum, so a station holding the minimum on any one of six features falls outside its own band. Nine did — the airport, Powai, Worli, BKC, Kasarvadavali, Kalamboli and three others — meaning the mask shaded locations where we hold ground truth. min–max excludes none of them and costs 1.4 points of grid coverage (81.3% masked against 82.7%). The case for p01–p99 is robustness to one freak station, which is worth something at a few hundred stations and not much at thirty-nine.
