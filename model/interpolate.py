@@ -5,7 +5,8 @@ Run directly: python model/interpolate.py
 Reads  data/processed/pm25_clean.parquet
        data/processed/station_features.parquet
 Writes data/processed/cv_results.parquet   (per fold, per model, per station)
-       data/processed/feature_bounds.json  (training range, for masking later)
+       data/processed/feature_bounds.json  (training range, drives the mask)
+       data/processed/model_card.json      (production model + calibrations)
 
 Three models, each given exactly the same information: the readings from every
 other station at the hour being predicted.
@@ -18,6 +19,12 @@ A fourth row, trees+idw, is the tree model handed the IDW estimate as an extra
 input. It is not a fourth approach, it is the test of whether land use adds
 anything on top of plain distance weighting.
 
+predict_surface() ships IDW alone. Kriging and the trees both lost to it here,
+and a model that scores worse is not worth the extra failure surface in an app.
+It returns a mask marking cells whose land use falls outside anything in
+training, which is most of the bounding box: the box is a rectangle over a
+coastal city and much of it is sea, forest and open land.
+
 Validation holds out whole cv_group values, never single stations. Two stations
 70 m apart are not an independent test of a spatial model: with one in the
 training set the other is trivially predictable, and the score would be
@@ -25,11 +32,14 @@ measuring that rather than interpolation.
 """
 
 import argparse
+import importlib.util
 import json
 import sys
 import time
+from functools import lru_cache
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -44,6 +54,7 @@ CLEAN_PATH = ROOT / "data" / "processed" / "pm25_clean.parquet"
 FEATURES_PATH = ROOT / "data" / "processed" / "station_features.parquet"
 CV_PATH = ROOT / "data" / "processed" / "cv_results.parquet"
 BOUNDS_PATH = ROOT / "data" / "processed" / "feature_bounds.json"
+CARD_PATH = ROOT / "data" / "processed" / "model_card.json"
 
 OSM_FEATURES = ["dist_major_road_m", "road_density_500m", "road_density_1km",
                 "dist_coast_m", "dist_industrial_m", "building_density_500m"]
@@ -301,6 +312,7 @@ def cross_validate(wide, feat):
     tree_cols = OSM_FEATURES + ["dist_nearest_src_km", "hour", "dayofweek",
                                 "month", "regional_mean"]
     rows = []
+    held_out = []
 
     for fold, g in enumerate(sorted(set(groups)), 1):
         targets = np.flatnonzero(groups == g)
@@ -340,6 +352,7 @@ def cross_validate(wide, feat):
                 "trees": plain.predict(x[tree_cols]),
                 "trees+idw": hybrid.predict(x[tree_cols + ["idw_est"]]),
             }
+            held_out.append((preds["idw"], y))
             for name, p in preds.items():
                 mae, rmse, n = metrics(p, y)
                 rows.append({"fold": fold, "cv_group": g, "station_id": ids[t],
@@ -353,7 +366,43 @@ def cross_validate(wide, feat):
               f"sill={params[1]:.2f} range={params[2]:.1f} km  "
               f"({time.time() - t0:.1f}s)")
 
-    return pd.DataFrame(rows)
+    pred = np.concatenate([p for p, _ in held_out])
+    obs = np.concatenate([o for _, o in held_out])
+    return pd.DataFrame(rows), (pred, obs)
+
+
+def calibrate_uncertainty(pred, obs, n_bins=20):
+    """Per-cell error bars, calibrated on the held-out predictions.
+
+    Error does not grow with distance from the nearest station -- correlation
+    -0.02, which is the pure-nugget variogram showing up again: neighbours were
+    not helping much, so being far from them costs little. What error does track
+    is the level itself, from RMSE ~10 ug/m3 where the city is clean to ~45
+    where it is not. So sigma is fitted against the prediction, not the
+    geometry, which is the opposite of what a kriging variance would give.
+    """
+    ok = ~np.isnan(pred) & ~np.isnan(obs)
+    pred, obs = pred[ok], obs[ok]
+    edges = np.unique(np.quantile(pred, np.linspace(0, 1, n_bins + 1)))
+    idx = np.clip(np.digitize(pred, edges[1:-1]), 0, len(edges) - 2)
+    centres, rmses, counts = [], [], []
+    for b in range(len(edges) - 1):
+        m = idx == b
+        if m.sum() < 50:
+            continue
+        centres.append(pred[m].mean())
+        rmses.append(np.sqrt(np.mean((pred[m] - obs[m]) ** 2)))
+        counts.append(m.sum())
+    centres, rmses, w = np.array(centres), np.array(rmses), np.sqrt(np.array(counts))
+    a, b = np.linalg.lstsq(np.column_stack([w, w * centres]), w * rmses, rcond=None)[0]
+    return {"form": "max(floor, a + b * prediction)", "a": float(a), "b": float(b),
+            # The fitted intercept can land slightly negative, which would hand
+            # back a nonsensical sigma on a very clean hour. Floor it at the
+            # smallest error any calibration bin actually showed.
+            "floor": float(rmses.min()),
+            "rmse_overall": float(np.sqrt(np.mean((pred - obs) ** 2))),
+            "note": "fitted on held-out predictions; error tracks level, not "
+                    "distance to the nearest station (r = -0.02)"}
 
 
 def summarise(cv):
@@ -388,6 +437,157 @@ def feature_bounds(feat):
     return {"n_stations": int(len(feat)), "features": b}
 
 
+
+# --------------------------------------------------------------------------
+# PRODUCTION SURFACE
+#
+# IDW only. Kriging and the trees both lost to it under leave-one-group-out CV
+# and neither is shipped: a model that scores worse is not worth the extra
+# failure surface in an app.
+# --------------------------------------------------------------------------
+
+# Cells per axis. 25 over the ~53 km box puts a cell at ~2.1 km, which is about
+# where the variogram goes flat. A finer grid would draw structure the data
+# cannot support, so `cell_km` comes back in the metadata for the app to show.
+GRID_CELLS = 25
+
+
+class Surface(NamedTuple):
+    lats: np.ndarray          # cell-centre latitudes, north-positive (n,)
+    lons: np.ndarray          # cell-centre longitudes (n,)
+    values: np.ndarray        # predicted ug/m3, (n_lat, n_lon)
+    sigma: np.ndarray         # 1-sigma uncertainty, same shape
+    mask: np.ndarray          # True where the cell is outside training range
+    meta: dict
+
+
+@lru_cache(maxsize=1)
+def osm_features():
+    """Load scripts/02_features.py by path.
+
+    Its name starts with a digit, so it cannot be imported normally, and
+    renaming it would break the numbered-script convention the repo already
+    uses. This is the one place that awkwardness shows up.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "osm_features", ROOT / "scripts" / "02_features.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@lru_cache(maxsize=1)
+def production():
+    """Station geometry, the tuned power, and the calibrations, loaded once."""
+    if not CARD_PATH.exists():
+        sys.exit(f"{CARD_PATH.relative_to(ROOT)} not found - "
+                 f"run model/interpolate.py first.")
+    card = json.loads(CARD_PATH.read_text(encoding="utf-8"))
+    bounds = json.loads(BOUNDS_PATH.read_text(encoding="utf-8"))["features"]
+    wide, feat, _ = load()
+    return {"wide": wide, "feat": feat, "card": card, "bounds": bounds,
+            "lat": feat["lat"].to_numpy(), "lon": feat["lon"].to_numpy()}
+
+
+def haversine_grid_km(lat, lon, slat, slon):
+    """Distances from every point to every station, (n_points, n_stations)."""
+    lat, lon = np.radians(lat)[:, None], np.radians(lon)[:, None]
+    slat, slon = np.radians(slat)[None, :], np.radians(slon)[None, :]
+    a = (np.sin((slat - lat) / 2) ** 2
+         + np.cos(lat) * np.cos(slat) * np.sin((slon - lon) / 2) ** 2)
+    return 2 * 6371.0 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
+    """True where any OSM feature falls outside the training range.
+
+    The station network only ever saw built-up Mumbai. A cell in the Arabian Sea
+    or inside the national park has no road, no buildings and no analogue in
+    training, and nothing in the CV score says what the model does there.
+
+    The band is min-max, so it is guaranteed to contain every station the model
+    trained on. The tighter p01-p99 is available via band=("p01", "p99"), but at
+    39 stations p01 sits just above the minimum and 9 stations fall outside
+    their own band -- the mask would shade locations where we hold ground truth.
+    It costs 1.4 points of coverage to avoid that, which is worth it here;
+    p01-p99 would earn its keep with a few hundred stations, not thirty-nine.
+    """
+    lo_key, hi_key = band
+    feats = osm_features().features_for(lats, lons)
+    mask = np.zeros(len(feats), dtype=bool)
+    reasons, below, above = {}, np.zeros(len(feats), bool), np.zeros(len(feats), bool)
+    for name, b in bounds.items():
+        v = feats[name].to_numpy()
+        lo, hi = v < b[lo_key], v > b[hi_key]
+        reasons[name] = int((lo | hi).sum())
+        below |= lo
+        above |= hi
+        mask |= lo | hi
+    # Two different kinds of extrapolation, and the app may want to treat them
+    # differently: empty land the network never sampled, versus urban cells
+    # denser than any station sits in.
+    reasons["_below_band"] = int(below.sum())
+    reasons["_above_band"] = int(above.sum())
+    return mask, reasons
+
+
+def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
+                    band=("min", "max")):
+    """Interpolated PM2.5 over the Mumbai bbox for one hour.
+
+    Returns a Surface: predictions, per-cell sigma, and a mask marking cells
+    whose land use falls outside anything the model was trained on. The mask is
+    advisory -- values are still returned for masked cells so the app can shade
+    rather than hole-punch them.
+    """
+    if pollutant != "pm25":
+        raise ValueError(
+            f"only pm25 was fetched in Phase 1; got {pollutant!r}. "
+            f"data/fetch.py would need to pull the other pollutants first.")
+
+    p = production()
+    ts = pd.Timestamp(timestamp)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    ts = ts.floor("h")
+
+    lon_min, lat_min, lon_max, lat_max = osm_features().BBOX
+    n = int(grid_resolution)
+    dlon, dlat = (lon_max - lon_min) / n, (lat_max - lat_min) / n
+    lons = np.linspace(lon_min + dlon / 2, lon_max - dlon / 2, n)
+    lats = np.linspace(lat_min + dlat / 2, lat_max - dlat / 2, n)
+    glon, glat = np.meshgrid(lons, lats)
+    flat_lat, flat_lon = glat.ravel(), glon.ravel()
+
+    mask, reasons = extrapolation_mask(flat_lat, flat_lon, p["bounds"], band)
+
+    if ts not in p["wide"].index:
+        empty = np.full((n, n), np.nan)
+        return Surface(lats, lons, empty, empty, mask.reshape(n, n),
+                       {"timestamp": ts, "n_stations": 0, "cell_km": None,
+                        "masked_fraction": float(mask.mean()),
+                        "mask_reasons": reasons,
+                        "note": "no station reported this hour"})
+
+    row = p["wide"].loc[ts].to_numpy(dtype=float)
+    live = ~np.isnan(row)
+    power = p["card"]["idw_power"]
+    d = haversine_grid_km(flat_lat, flat_lon, p["lat"][live], p["lon"][live])
+    w = 1.0 / np.maximum(d, MIN_DIST_KM) ** power
+    values = (w @ row[live]) / w.sum(axis=1)
+
+    u = p["card"]["uncertainty"]
+    sigma = np.maximum(u["a"] + u["b"] * values, u["floor"])
+
+    cell_km = float(np.mean([dlat * 111.0,
+                             dlon * 111.0 * np.cos(np.radians((lat_min + lat_max) / 2))]))
+    return Surface(
+        lats, lons, values.reshape(n, n), sigma.reshape(n, n), mask.reshape(n, n),
+        {"timestamp": ts, "n_stations": int(live.sum()), "idw_power": power,
+         "cell_km": round(cell_km, 2), "masked_fraction": float(mask.mean()),
+         "mask_reasons": reasons, "band": list(band),
+         "cv_rmse": p["card"]["cv"]["rmse"]})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--screen", type=float, default=None, metavar="UGM3",
@@ -405,7 +605,7 @@ def main():
         print(f"screened out {n_screened:,} readings above {args.screen:g} ug/m3")
     print()
 
-    cv = cross_validate(wide, feat)
+    cv, (idw_pred, idw_obs) = cross_validate(wide, feat)
     out_path = (CV_PATH if args.screen is None
                 else CV_PATH.with_name(f"cv_results_screen{args.screen:g}.parquet"))
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,6 +615,27 @@ def main():
     BOUNDS_PATH.write_text(json.dumps(bounds, indent=2), encoding="utf-8")
 
     summary = summarise(cv)
+
+    # The production model refits the power over every station, using the same
+    # leave-one-group-out rule the folds used, so no group ever tunes on itself.
+    values, avail = wide.to_numpy(dtype=float), wide.notna().to_numpy()
+    dist = distance_matrix(feat["lat"].to_numpy(), feat["lon"].to_numpy())
+    prod_power = select_idw_power(values, avail, dist,
+                                  np.arange(len(feat)), feat["cv_group"].to_numpy())
+    card = {
+        "model": "idw",
+        "why": "beat kriging and gradient-boosted trees under leave-one-group-out CV",
+        "idw_power": float(prod_power),
+        "cv": {"mae": float(summary.loc[summary.model == "idw", "MAE"].iloc[0]),
+               "rmse": float(summary.loc[summary.model == "idw", "RMSE"].iloc[0]),
+               "n_folds": int(cv["fold"].nunique()),
+               "n_stations": int(cv["station_id"].nunique()),
+               "n_station_hours": int(summary.loc[summary.model == "idw",
+                                                  "n_station_hours"].iloc[0])},
+        "comparison": summary.set_index("model")[["MAE", "RMSE"]].round(3).to_dict("index"),
+        "uncertainty": calibrate_uncertainty(idw_pred, idw_obs),
+    }
+    CARD_PATH.write_text(json.dumps(card, indent=2), encoding="utf-8")
     pd.set_option("display.width", 200)
     pd.set_option("display.max_columns", 30)
     pd.set_option("display.max_rows", 200)
@@ -442,7 +663,52 @@ def main():
     print("-" * 96)
     print(pd.DataFrame(bounds["features"]).T.round(1).to_string())
 
+    u = card["uncertainty"]
+    print("\n" + "-" * 96)
+    print("PRODUCTION SURFACE  (IDW only - kriging and trees lost, so they are not shipped)")
+    print("-" * 96)
+    print(f"idw power       {prod_power:g}  (refitted over all {len(feat)} stations)")
+    print(f"uncertainty     sigma = {u['a']:.2f} + {u['b']:.3f} x prediction  "
+          f"(pooled RMSE {u['rmse_overall']:.2f})")
+    print(f"                error tracks the level, not the distance to a station")
+
+    production.cache_clear()
+    ts = wide.notna().sum(axis=1).idxmax()
+    for res in (15, 25, 40, 60):
+        surf = predict_surface(ts, grid_resolution=res)
+        m = surf.meta
+        print(f"  grid {res:>3}x{res:<3} = {res * res:>5,} cells at ~{m['cell_km']:.1f} km   "
+              f"masked {100 * m['masked_fraction']:>5.1f}%   "
+              f"values {np.nanmin(surf.values):.1f}-{np.nanmax(surf.values):.1f} ug/m3")
+
+    surf = predict_surface(ts)
+    print(f"\nAt {surf.meta['timestamp']} ({surf.meta['n_stations']} stations reporting), "
+          f"{100 * surf.meta['masked_fraction']:.1f}% of the {GRID_CELLS}x{GRID_CELLS} grid "
+          f"is outside the training range.")
+    r = surf.meta["mask_reasons"]
+    cells = surf.values.size
+    print(f"  {100 * r['_below_band'] / cells:>5.1f}%  below the band "
+          f"(sea, forest, open land the network never sampled)")
+    print(f"  {100 * r['_above_band'] / cells:>5.1f}%  above the band "
+          f"(denser than any station is placed in)")
+    print("Cells masked by each feature (a cell can fail several):")
+    for name, cnt in sorted(r.items(), key=lambda kv: -kv[1]):
+        if cnt and not name.startswith("_"):
+            print(f"  {100 * cnt / cells:>5.1f}%  {name}")
+
+    # A band that excludes the training stations would hide ground truth.
+    print("\nSelf-consistency of the band (stations outside their own bounds):")
+    for lo, hi in (("p01", "p99"), ("min", "max")):
+        own = np.zeros(len(feat), bool)
+        for name, b in bounds["features"].items():
+            v = feat[name].to_numpy()
+            own |= (v < b[lo]) | (v > b[hi])
+        alt = predict_surface(ts, band=(lo, hi))
+        print(f"  {lo}-{hi:<4} masks {own.sum():>2}/{len(feat)} training stations, "
+              f"{100 * alt.meta['masked_fraction']:>5.1f}% of the grid")
+
     print(f"\nWrote {len(cv):,} rows to {out_path.relative_to(ROOT)}")
+    print(f"Wrote {CARD_PATH.relative_to(ROOT)}")
     print(f"Wrote {BOUNDS_PATH.relative_to(ROOT)}")
 
 
