@@ -43,8 +43,11 @@ from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import curve_fit
-from sklearn.ensemble import HistGradientBoostingRegressor
+
+# scipy.optimize and sklearn are imported inside the two functions that need
+# them. Both are cross-validation-only -- the shipped surface is IDW, which
+# needs neither -- and importing sklearn eagerly cost the app 2.6s of start-up
+# for a model it never runs.
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -208,6 +211,8 @@ def fit_variogram(z, avail, dist, sources):
         counts.append(m.sum())
     centres, gammas, counts = map(np.array, (centres, gammas, counts))
 
+    from scipy.optimize import curve_fit
+
     try:
         popt, _ = curve_fit(exponential_variogram, centres, gammas,
                             p0=[0.2, 0.8, 15.0], sigma=1.0 / np.sqrt(counts),
@@ -300,6 +305,8 @@ def metrics(pred, truth):
 
 
 def cross_validate(wide, feat):
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
     values = wide.to_numpy(dtype=float)
     avail = ~np.isnan(values)
     times = wide.index.tz_convert(TZ)
