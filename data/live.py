@@ -135,13 +135,20 @@ def parse(records, stations):
     return pd.Series(values, dtype=float), observed, unmatched
 
 
-def fetch_live(stations):
-    """Current PM2.5 for our stations. Never raises; failures come back as ok=False."""
-    key = api_key()
+def fetch_live(stations, key=None):
+    """Current PM2.5 for our stations. Never raises; failures come back as ok=False.
+
+    `key` lets the caller supply the credential -- the deployed app reads it
+    from Streamlit's secrets manager, where there is no .env to read. Falling
+    back to the environment keeps local development working unchanged.
+    """
+    key = key or api_key()
     if not key:
         return LiveResult(ok=False, n_total=len(stations),
-                          error="No DATAGOV_API_KEY found in .env",
-                          hint="Add DATAGOV_API_KEY to the .env file in the project root.")
+                          error="No DATAGOV_API_KEY configured",
+                          hint="Locally, add DATAGOV_API_KEY to .env in the "
+                               "project root. On Streamlit Cloud, add it under "
+                               "Settings > Secrets.")
     try:
         records = _rows(key)
     except PermissionError as e:

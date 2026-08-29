@@ -187,7 +187,13 @@ def engine():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.production()
-    mod.osm_features()._index()
+    # No OSM warm-up: the extrapolation masks are baked into
+    # data/processed/grid_masks.npz by `python model/interpolate.py --masks`,
+    # so the 41 MB of point clouds are a pipeline input, not a runtime one.
+    if mod.grid_masks() is None:
+        raise FileNotFoundError(
+            f"{mod.GRID_MASK_PATH.name} is missing - run "
+            f"'python model/interpolate.py --masks' to generate it.")
     return mod
 
 
@@ -203,6 +209,21 @@ def model_card():
     return json.loads(engine().CARD_PATH.read_text(encoding="utf-8"))
 
 
+def datagov_key():
+    """The live-feed credential: Streamlit secrets first, then .env.
+
+    st.secrets raises rather than returning empty when no secrets file exists,
+    which is the normal case locally, so the lookup is guarded and simply falls
+    through to the environment. Only this one key is needed in the cloud --
+    OPENAQ_API_KEY belongs to the offline pipeline, not the app.
+    """
+    try:
+        value = st.secrets.get("DATAGOV_API_KEY")
+    except Exception:
+        value = None
+    return str(value) if value else None
+
+
 @st.cache_data(ttl=LIVE_TTL, show_spinner="Fetching current readings...")
 def live_snapshot():
     """Current CPCB readings, refetched at most every LIVE_TTL seconds."""
@@ -212,7 +233,7 @@ def live_snapshot():
     _, st_df = panel()
     # A plain dict, not the dataclass: st.cache_data pickles what it stores, and
     # a class defined in a module loaded by path is not importable by name.
-    return dataclasses.asdict(mod.fetch_live(st_df))
+    return dataclasses.asdict(mod.fetch_live(st_df, key=datagov_key()))
 
 
 def _unpack(s):
@@ -282,7 +303,7 @@ t_start = time.perf_counter()
 try:
     wide, stations = panel()
     card = model_card()
-except SystemExit as e:
+except (SystemExit, FileNotFoundError) as e:
     st.error(str(e))
     st.stop()
 
