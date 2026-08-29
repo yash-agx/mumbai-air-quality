@@ -49,6 +49,36 @@ Two caveats on the table. The nearest bin rests on only 10 pairs, and those are 
 
 ---
 
+## The other half: diurnal timing *is* location-specific, and IDW discards it
+
+The variogram result above is about the hourly **level**. Take the same data and ask about **timing** instead — when in the day each place peaks and troughs — and the answer inverts. Together these two are the finding; neither is complete alone.
+
+**Locations have genuinely different daily rhythms.** Averaging each monitor's readings by hour of day, then removing that site's level and swing so only shape remains:
+
+| comparison | median r | IQR |
+|---|---|---|
+| Same monitor, independent halves of the record | **0.889** | 0.799–0.956 |
+| Two different monitors | **0.504** | 0.259–0.683 |
+
+**The noise ceiling is what makes this comparison valid**, and it is the reason for the odd/even-day split. A bare between-monitor correlation of 0.50 proves nothing on its own — profiles built from finite, gappy records are noisy, and the de-mean-and-rescale step amplifies that noise for low-amplitude sites, so 0.50 could just be measurement error. Splitting each monitor's own record by odd and even days gives two independent estimates of the *same* site's profile. Correlating those fixes how well a profile can be reproduced at all when the underlying shape is identical by construction: r = 0.889. Different monitors reach only 57% of that ceiling. Gap +0.385, Mann-Whitney p = 5.6e-20. The difference is real structure, not sampling noise.
+
+A single common shape explains just **32.9%** of the variance across the 39 sites. Median day–night swing is 10.4 µg/m³ (range 2.6–20.5), so the shape is a substantial share of what a resident actually experiences.
+
+**IDW cannot represent any of it.** An interpolated series is a fixed-weight average over all reporting monitors, so its diurnal shape is the citywide shape whatever cell it is computed for. Measured at each monitor's own location, against the all-monitor average curve:
+
+| | median r with the city curve |
+|---|---|
+| Measured monitor | **0.758** |
+| IDW estimate for the same spot | **0.997** |
+
+The estimate reproduces the city's daily rhythm essentially exactly and the local one not at all. Same mechanism as the flat variogram — with no exploitable spatial correlation, the weights spread wide and the answer converges on the city average — but here the loss is visible as a *shape* being flattened, not just a number being close.
+
+**So the honest statement of the finding is both halves together:** at this network's spacing the hourly level is not spatially predictable, while the diurnal timing is location-specific and reliably measurable — and the interpolation throws the second away along with the first. Anything that wants local timing needs measurement at that location; no amount of interpolation between monitors 1–40 km apart will recover it.
+
+**Cheap to compute, which is worth recording.** One cell's full 12,294-hour interpolated history is a single matrix product against the panel (distances to monitors are fixed), about **7 ms** — so the app's time-patterns section needs no precomputation and no sampling.
+
+---
+
 ## For the README: the monitor network is sited unlike the city it measures
 
 81% of the Mumbai bounding box is masked as outside the training range. Worth stating plainly on the README, because the reason is not what it first looks like.

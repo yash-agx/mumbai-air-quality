@@ -58,9 +58,11 @@ Pooled over 376,112 held-out station-hours across 35 folds:
 
 **IDW wins, and nothing beats simply averaging the city by more than 0.5%.** Kriging beats IDW at 12 of 39 monitors; the trees at 13 of 39. Both differences are statistically detectable and practically irrelevant. Adding OSM land-use features made the estimate worse, not better.
 
-## Why: spatial correlation dies below the network's own spacing
+## The finding: level is not spatially predictable, but timing is
 
-This is the finding, and it explains the table above.
+Two results that only make sense together. They explain the table above, and they point in opposite directions.
+
+### Hourly level: no spatial structure to exploit
 
 Take each hour's readings, subtract that hour's citywide mean and divide by its spread. What remains is the purely spatial pattern with the shared "the whole basin is high tonight" signal removed. That residual field has almost no spatial structure at the distances between monitors:
 
@@ -81,6 +83,28 @@ The closest monitor pairs outside the co-located groups are ~1 km apart and most
 Two honest caveats on that table. The nearest bin rests on 10 pairs, and those are exactly the near-coincident monitors that cross-validation holds out together — so the one bin showing structure is the one deliberately not exploited. And the fitted variogram is correspondingly unstable across folds: median nugget 0.95, range poorly identified anywhere from 2 km to the 300 km bound. That instability is itself the result; there is no well-defined range to find because there is almost nothing to fit.
 
 The map is therefore honestly described as *the city average, tilted slightly* — not a resolved street-level pollution field. The app says so in its own model card panel, and the grid is drawn at ~2.3 km cells rather than a smooth high-resolution raster that would imply more certainty than the data supports.
+
+### Diurnal timing: location-specific, and thrown away
+
+Ask about *when* each place peaks rather than *how high*, and the answer inverts. Averaging each monitor by hour of day, then removing that site's level and swing so only shape remains:
+
+| comparison | median r | IQR |
+|---|---:|---|
+| Same monitor, independent halves of the record | **0.889** | 0.799–0.956 |
+| Two different monitors | **0.504** | 0.259–0.683 |
+
+The first row is a **noise ceiling**, and it is what makes the second row mean anything. A between-monitor correlation of 0.50 proves nothing by itself — profiles built from finite, gappy records are noisy, and removing each site's level and swing amplifies that noise, so 0.50 could be measurement error. Splitting each monitor's own record into odd and even days gives two independent estimates of the *same* profile, where the true shape is identical by construction. Correlating those measures how well a profile can be reproduced at all: r = 0.889. Different monitors reach only 57% of that ceiling (gap +0.385, Mann–Whitney p = 5.6×10⁻²⁰), so locations really do have distinct daily rhythms. A single common shape explains just 32.9% of the variance across the 39 sites, on a median day–night swing of 10.4 µg/m³.
+
+**IDW cannot represent that.** An interpolated series is a fixed-weight average over all reporting monitors, so its diurnal shape is the citywide shape wherever it is computed. Measured at each monitor's own location, against the all-monitor average curve:
+
+| | median r with the city curve |
+|---|---:|
+| Measured monitor | **0.758** |
+| IDW estimate for the same spot | **0.997** |
+
+The estimate reproduces the city's daily rhythm almost exactly and the local one not at all — the same mechanism as the flat variogram, but visible as a shape being flattened rather than a number being close.
+
+**Both halves together are the result.** At this network's spacing the hourly level is not spatially predictable, while diurnal timing is location-specific and reliably measurable — and the interpolation discards the second along with the first. Local timing requires measurement at that location; interpolating between monitors 1–40 km apart will not recover it. The app's time-patterns section plots the measured and estimated curves as separate series so the gap is visible rather than asserted.
 
 ## Limitations
 
