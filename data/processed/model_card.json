@@ -1,0 +1,42 @@
+{
+  "model": "idw",
+  "why": "beat kriging and gradient-boosted trees under leave-one-group-out CV",
+  "idw_power": 0.5,
+  "cv": {
+    "mae": 11.228715232190295,
+    "rmse": 21.117027756125044,
+    "n_folds": 35,
+    "n_stations": 39,
+    "n_station_hours": 376112
+  },
+  "comparison": {
+    "idw": {
+      "MAE": 11.229,
+      "RMSE": 21.117
+    },
+    "kriging": {
+      "MAE": 11.293,
+      "RMSE": 21.168
+    },
+    "regional_mean": {
+      "MAE": 11.359,
+      "RMSE": 21.223
+    },
+    "trees+idw": {
+      "MAE": 11.286,
+      "RMSE": 21.55
+    },
+    "trees": {
+      "MAE": 11.385,
+      "RMSE": 21.608
+    }
+  },
+  "uncertainty": {
+    "form": "max(floor, a + b * prediction)",
+    "a": -0.6335382364207424,
+    "b": 0.5950893281054054,
+    "floor": 9.258999979389015,
+    "rmse_overall": 21.117027756125044,
+    "note": "fitted on held-out predictions; error tracks level, not distance to the nearest station (r = -0.02)"
+  }
+}

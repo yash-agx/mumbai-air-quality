@@ -1,7 +1,17 @@
-﻿.venv/
+.venv/
 .env
+.streamlit/secrets.toml
 data/raw/
 data/interim/
 __pycache__/
 *.pyc
-data/processed/
+
+# The deployed app reads a handful of small artefacts out of data/processed, so
+# those are committed and the rest of the directory is not. Ignoring the
+# directory itself would make the negations below unreachable, hence the /*.
+data/processed/*
+!data/processed/pm25_clean.parquet
+!data/processed/station_features.parquet
+!data/processed/model_card.json
+!data/processed/feature_bounds.json
+!data/processed/grid_masks.npz

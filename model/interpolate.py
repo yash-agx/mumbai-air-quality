@@ -58,6 +58,7 @@ FEATURES_PATH = ROOT / "data" / "processed" / "station_features.parquet"
 CV_PATH = ROOT / "data" / "processed" / "cv_results.parquet"
 BOUNDS_PATH = ROOT / "data" / "processed" / "feature_bounds.json"
 CARD_PATH = ROOT / "data" / "processed" / "model_card.json"
+GRID_MASK_PATH = ROOT / "data" / "processed" / "grid_masks.npz"
 
 OSM_FEATURES = ["dist_major_road_m", "road_density_500m", "road_density_1km",
                 "dist_coast_m", "dist_industrial_m", "building_density_500m"]
@@ -458,6 +459,12 @@ def feature_bounds(feat):
 # cannot support, so `cell_km` comes back in the metadata for the app to show.
 GRID_CELLS = 25
 
+# The resolutions the app's "Map detail" control offers. The extrapolation mask
+# for each is baked ahead of time by --masks, so the deployed app never loads
+# the 41 MB of OSM point clouds -- it only ever needed them to answer a question
+# whose answer does not change: which cells look nothing like a monitor site.
+GRID_RESOLUTIONS = (15, 25, 40, 60)
+
 # Why a cell is masked, which matters more than that it is. Emptiness is the
 # uninteresting half -- sea and forest, correctly refused. Remoteness is the
 # real caveat: inhabited ground that is simply farther from a road or an
@@ -479,6 +486,56 @@ class Surface(NamedTuple):
     mask: np.ndarray          # True where the cell is outside training range
     mask_kind: np.ndarray     # MASK_* per cell, saying which kind
     meta: dict
+
+
+def grid_axes(bbox, n):
+    """Cell-centre latitudes and longitudes for an n x n grid over the bbox.
+
+    Used by both the mask baking and the prediction path; if these two ever
+    built the grid differently the mask would silently describe other cells.
+    """
+    lon_min, lat_min, lon_max, lat_max = bbox
+    dlon, dlat = (lon_max - lon_min) / n, (lat_max - lat_min) / n
+    return (np.linspace(lat_min + dlat / 2, lat_max - dlat / 2, n),
+            np.linspace(lon_min + dlon / 2, lon_max - dlon / 2, n))
+
+
+@lru_cache(maxsize=1)
+def grid_masks():
+    """The baked masks, or None when they have not been generated yet."""
+    if not GRID_MASK_PATH.exists():
+        return None
+    z = np.load(GRID_MASK_PATH, allow_pickle=False)
+    meta = json.loads(str(z["meta"]))
+    return {"bbox": tuple(float(v) for v in z["bbox"]),
+            "band": tuple(meta["band"]),
+            "reasons": meta["reasons"],
+            "kind": {int(k.split("_")[1]): z[k] for k in z.files
+                     if k.startswith("kind_")}}
+
+
+def write_grid_masks(resolutions=GRID_RESOLUTIONS, band=("min", "max")):
+    """Bake the extrapolation mask for each resolution the app offers.
+
+    Needs the OSM layers, so it runs here in the pipeline rather than in the
+    app. The output is a few kilobytes against 41 MB of source data, because
+    the mask is a yes/no per cell and the cells are the same every hour.
+    """
+    bounds = json.loads(BOUNDS_PATH.read_text(encoding="utf-8"))["features"]
+    bbox = osm_features().BBOX
+    payload = {"bbox": np.array(bbox, dtype=float)}
+    meta = {"band": list(band), "resolutions": list(resolutions), "reasons": {}}
+    for n in resolutions:
+        lats, lons = grid_axes(bbox, n)
+        glon, glat = np.meshgrid(lons, lats)
+        _, kind, reasons = extrapolation_mask(glat.ravel(), glon.ravel(), bounds, band)
+        payload[f"kind_{n}"] = kind.reshape(n, n).astype(np.int8)
+        meta["reasons"][str(n)] = {k: int(v) for k, v in reasons.items()}
+    payload["meta"] = np.array(json.dumps(meta))
+    GRID_MASK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(GRID_MASK_PATH, **payload)
+    grid_masks.cache_clear()
+    return meta
 
 
 @lru_cache(maxsize=1)
@@ -586,15 +643,28 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
     ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
     ts = ts.floor("h")
 
-    lon_min, lat_min, lon_max, lat_max = osm_features().BBOX
     n = int(grid_resolution)
+    baked = grid_masks()
+    use_baked = (baked is not None and tuple(band) == baked["band"]
+                 and n in baked["kind"])
+
+    # The bbox comes from the baked file when there is one, so the deployed app
+    # does not import the OSM module at all -- not even for a constant.
+    bbox = baked["bbox"] if baked is not None else osm_features().BBOX
+    lon_min, lat_min, lon_max, lat_max = bbox
     dlon, dlat = (lon_max - lon_min) / n, (lat_max - lat_min) / n
-    lons = np.linspace(lon_min + dlon / 2, lon_max - dlon / 2, n)
-    lats = np.linspace(lat_min + dlat / 2, lat_max - dlat / 2, n)
+    lats, lons = grid_axes(bbox, n)
     glon, glat = np.meshgrid(lons, lats)
     flat_lat, flat_lon = glat.ravel(), glon.ravel()
 
-    mask, kind, reasons = extrapolation_mask(flat_lat, flat_lon, p["bounds"], band)
+    if use_baked:
+        kind = baked["kind"][n].ravel()
+        mask = kind != MASK_NONE
+        reasons = dict(baked["reasons"][str(n)])
+    else:
+        # Falls through to the OSM layers: a resolution or band nobody baked.
+        mask, kind, reasons = extrapolation_mask(flat_lat, flat_lon,
+                                                 p["bounds"], band)
 
     if readings is not None:
         row = (pd.Series(readings, dtype=float)
@@ -637,7 +707,24 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--screen", type=float, default=None, metavar="UGM3",
                     help="drop readings above this before fitting (see load())")
+    ap.add_argument("--masks", action="store_true",
+                    help="only bake the grid masks, skipping cross-validation")
     args = ap.parse_args()
+
+    if args.masks:
+        meta = write_grid_masks()
+        size = GRID_MASK_PATH.stat().st_size
+        print(f"Baked masks for {meta['resolutions']} at band "
+              f"{'-'.join(meta['band'])} -> {GRID_MASK_PATH.relative_to(ROOT)} "
+              f"({size / 1024:.1f} KB)")
+        for n in meta["resolutions"]:
+            r = meta["reasons"][str(n)]
+            masked = r["_empty"] + r["_remote"] + r["_other"]
+            pct = 100 * masked / (n * n)
+            print(f"  {n:>3}x{n:<3} {pct:>5.1f}% masked  "
+                  f"(empty {r['_empty']}, remote {r['_remote']}, "
+                  f"other {r['_other']})")
+        return
 
     wide, feat, n_screened = load(args.screen)
     print("=" * 96)
