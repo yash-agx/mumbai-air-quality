@@ -458,6 +458,18 @@ def feature_bounds(feat):
 # cannot support, so `cell_km` comes back in the metadata for the app to show.
 GRID_CELLS = 25
 
+# Why a cell is masked, which matters more than that it is. Emptiness is the
+# uninteresting half -- sea and forest, correctly refused. Remoteness is the
+# real caveat: inhabited ground that is simply farther from a road or an
+# industrial estate than any monitor sits, where the model is extrapolating
+# into quieter land than it was ever trained on.
+MASK_NONE, MASK_EMPTY, MASK_REMOTE, MASK_OTHER = 0, 1, 2, 3
+
+# Falling below the band on these means "less built than anywhere we measured".
+DENSITY_FEATURES = ("road_density_500m", "road_density_1km", "building_density_500m")
+# Rising above the band on these means "farther from one than anywhere we measured".
+REMOTENESS_FEATURES = ("dist_major_road_m", "dist_industrial_m")
+
 
 class Surface(NamedTuple):
     lats: np.ndarray          # cell-centre latitudes, north-positive (n,)
@@ -465,6 +477,7 @@ class Surface(NamedTuple):
     values: np.ndarray        # predicted ug/m3, (n_lat, n_lon)
     sigma: np.ndarray         # 1-sigma uncertainty, same shape
     mask: np.ndarray          # True where the cell is outside training range
+    mask_kind: np.ndarray     # MASK_* per cell, saying which kind
     meta: dict
 
 
@@ -521,8 +534,10 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
     """
     lo_key, hi_key = band
     feats = osm_features().features_for(lats, lons)
-    mask = np.zeros(len(feats), dtype=bool)
-    reasons, below, above = {}, np.zeros(len(feats), bool), np.zeros(len(feats), bool)
+    n = len(feats)
+    mask = np.zeros(n, dtype=bool)
+    below, above = np.zeros(n, bool), np.zeros(n, bool)
+    empty, remote, reasons = np.zeros(n, bool), np.zeros(n, bool), {}
     for name, b in bounds.items():
         v = feats[name].to_numpy()
         lo, hi = v < b[lo_key], v > b[hi_key]
@@ -530,12 +545,22 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
         below |= lo
         above |= hi
         mask |= lo | hi
-    # Two different kinds of extrapolation, and the app may want to treat them
-    # differently: empty land the network never sampled, versus urban cells
-    # denser than any station sits in.
+        if name in DENSITY_FEATURES:
+            empty |= lo
+        if name in REMOTENESS_FEATURES:
+            remote |= hi
+
+    # Emptiness wins where a cell is both: open water far from a road is
+    # refused because there is nothing there, not because of the distance.
+    kind = np.where(empty, MASK_EMPTY,
+                    np.where(remote, MASK_REMOTE,
+                             np.where(mask, MASK_OTHER, MASK_NONE))).astype(np.int8)
     reasons["_below_band"] = int(below.sum())
     reasons["_above_band"] = int(above.sum())
-    return mask, reasons
+    reasons["_empty"] = int((kind == MASK_EMPTY).sum())
+    reasons["_remote"] = int((kind == MASK_REMOTE).sum())
+    reasons["_other"] = int((kind == MASK_OTHER).sum())
+    return mask, kind, reasons
 
 
 def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
@@ -565,11 +590,12 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
     glon, glat = np.meshgrid(lons, lats)
     flat_lat, flat_lon = glat.ravel(), glon.ravel()
 
-    mask, reasons = extrapolation_mask(flat_lat, flat_lon, p["bounds"], band)
+    mask, kind, reasons = extrapolation_mask(flat_lat, flat_lon, p["bounds"], band)
 
     if ts not in p["wide"].index:
-        empty = np.full((n, n), np.nan)
-        return Surface(lats, lons, empty, empty, mask.reshape(n, n),
+        blank = np.full((n, n), np.nan)
+        return Surface(lats, lons, blank, blank, mask.reshape(n, n),
+                       kind.reshape(n, n),
                        {"timestamp": ts, "n_stations": 0, "cell_km": None,
                         "masked_fraction": float(mask.mean()),
                         "mask_reasons": reasons,
@@ -589,6 +615,7 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
                              dlon * 111.0 * np.cos(np.radians((lat_min + lat_max) / 2))]))
     return Surface(
         lats, lons, values.reshape(n, n), sigma.reshape(n, n), mask.reshape(n, n),
+        kind.reshape(n, n),
         {"timestamp": ts, "n_stations": int(live.sum()), "idw_power": power,
          "cell_km": round(cell_km, 2), "masked_fraction": float(mask.mean()),
          "mask_reasons": reasons, "band": list(band),
