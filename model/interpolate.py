@@ -564,13 +564,17 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
 
 
 def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
-                    band=("min", "max")):
+                    band=("min", "max"), readings=None):
     """Interpolated PM2.5 over the Mumbai bbox for one hour.
 
     Returns a Surface: predictions, per-cell sigma, and a mask marking cells
     whose land use falls outside anything the model was trained on. The mask is
     advisory -- values are still returned for masked cells so the app can shade
     rather than hole-punch them.
+
+    `readings` overrides the stored panel with a station_id -> ug/m3 Series, so
+    the same interpolation can run on a live feed instead of on history. The
+    timestamp is then only a label for what is being drawn.
     """
     if pollutant != "pm25":
         raise ValueError(
@@ -592,7 +596,15 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
 
     mask, kind, reasons = extrapolation_mask(flat_lat, flat_lon, p["bounds"], band)
 
-    if ts not in p["wide"].index:
+    if readings is not None:
+        row = (pd.Series(readings, dtype=float)
+                 .reindex(p["wide"].columns).to_numpy(dtype=float))
+    elif ts in p["wide"].index:
+        row = p["wide"].loc[ts].to_numpy(dtype=float)
+    else:
+        row = None
+
+    if row is None or not np.isfinite(row).any():
         blank = np.full((n, n), np.nan)
         return Surface(lats, lons, blank, blank, mask.reshape(n, n),
                        kind.reshape(n, n),
@@ -601,7 +613,6 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
                         "mask_reasons": reasons,
                         "note": "no station reported this hour"})
 
-    row = p["wide"].loc[ts].to_numpy(dtype=float)
     live = ~np.isnan(row)
     power = p["card"]["idw_power"]
     d = haversine_grid_km(flat_lat, flat_lon, p["lat"][live], p["lon"][live])
