@@ -137,6 +137,13 @@ REASON_LONG = {
 FEATHER = 0.10
 GRID_DEFAULT = 25
 
+# Session keys for the location feature. The browser's coordinates live only in
+# this session's memory for as long as the tab is open; nothing is written to
+# disk, logged, or put in the URL. They do reach the server, because the
+# interpolation runs there -- the UI says so rather than implying otherwise.
+GEO_KEY = "geo_position"
+LOCATE_FLAG = "locate_requested"
+
 st.set_page_config(page_title="Mumbai air quality", layout="wide")
 
 
@@ -291,6 +298,22 @@ def contributions(lat, lon, readings, stations, power, top_n=5):
     return top, float(top["weight"].sum()), len(ranked)
 
 
+def cell_index(lat, lon, lats, lons):
+    """Flat index of the grid cell containing a point, matching the ravel order."""
+    i = int(np.argmin(np.abs(np.asarray(lats) - lat)))
+    j = int(np.argmin(np.abs(np.asarray(lons) - lon)))
+    return i * len(lons) + j
+
+
+def km_outside(lat, lon, bbox):
+    """How far a point sits outside the mapped rectangle, in km. 0 when inside."""
+    lon_min, lat_min, lon_max, lat_max = bbox
+    dlat = max(lat_min - lat, 0.0, lat - lat_max)
+    dlon = max(lon_min - lon, 0.0, lon - lon_max)
+    return float(np.hypot(dlat * 111.0,
+                          dlon * 111.0 * np.cos(np.radians(lat))))
+
+
 def swatch(color, label):
     c = f"rgb({color[0]},{color[1]},{color[2]})"
     return (f'<span style="display:inline-block;width:14px;height:14px;'
@@ -340,6 +363,40 @@ scale = st.sidebar.radio(
 explain = st.sidebar.toggle("Show why grey areas are grey", value=False)
 resolution = st.sidebar.select_slider("Map detail", [15, 25, 40, 60],
                                       value=GRID_DEFAULT)
+
+st.sidebar.divider()
+if st.session_state.get(LOCATE_FLAG):
+    if st.sidebar.button("Clear my location", width="stretch"):
+        # Drop the flag and the component's stored value; nothing else held it.
+        st.session_state.pop(LOCATE_FLAG, None)
+        st.session_state.pop(GEO_KEY, None)
+        st.rerun()
+elif st.sidebar.button("Use my location", width="stretch"):
+    st.session_state[LOCATE_FLAG] = True
+    st.rerun()
+
+# ---------------------------------------------------------------- location
+# Only asked for when the button is pressed, so the browser never prompts for
+# permission on page load. The component resolves rather than rejects on
+# denial, so a refusal arrives as data and the app carries on unchanged.
+geo = None
+if st.session_state.get(LOCATE_FLAG):
+    from streamlit_js_eval import get_geolocation
+
+    pos = get_geolocation(component_key=GEO_KEY)
+    if pos is None:
+        geo = {"state": "waiting"}
+    elif isinstance(pos, dict) and pos.get("error"):
+        err = pos["error"]
+        geo = {"state": "denied" if err.get("code") == 1 else "unavailable",
+               "message": str(err.get("message") or "")}
+    elif isinstance(pos, dict) and pos.get("coords"):
+        c = pos["coords"]
+        geo = {"state": "ok", "lat": float(c["latitude"]),
+               "lon": float(c["longitude"]),
+               "accuracy_m": float(c.get("accuracy") or 0)}
+    else:
+        geo = {"state": "unavailable", "message": "no position returned"}
 
 # ---------------------------------------------------------------- source
 # Live by default; history only when asked for. When the live feed cannot be
@@ -430,6 +487,24 @@ cells = pd.DataFrame({
     "line3": [r[2] for r in rows], "line4": [r[3] for r in rows],
 })
 
+# Resolve the position to a grid cell now that the grid exists. Anything that
+# is not a usable in-bbox point becomes a status the panel explains in words.
+located = None
+if geo is not None:
+    if geo["state"] == "ok":
+        bbox = engine().grid_masks()["bbox"]
+        out_km = km_outside(geo["lat"], geo["lon"], bbox)
+        if out_km > 0:
+            located = {"state": "outside", "km": out_km,
+                       "lat": geo["lat"], "lon": geo["lon"]}
+        else:
+            located = {"state": "inside",
+                       "idx": cell_index(geo["lat"], geo["lon"], lats, lons),
+                       "lat": geo["lat"], "lon": geo["lon"],
+                       "accuracy_m": geo["accuracy_m"]}
+    else:
+        located = dict(geo)
+
 # ---------------------------------------------------------------- monitors
 pts = stations.copy()
 pts["value"] = pts["station_id"].map(readings).astype(float)
@@ -494,6 +569,18 @@ else:
         "on, because they look nothing like anywhere we have a monitor.")
 
 # ---------------------------------------------------------------- map
+map_layers = []
+if located is not None and located["state"] == "inside":
+    here = pd.DataFrame([{"lat": located["lat"], "lon": located["lon"],
+                          "title": "Your location", "line2": "",
+                          "line3": "", "line4": ""}])
+    map_layers.append(
+        pdk.Layer("ScatterplotLayer", here, id="here",
+                  get_position=["lon", "lat"], get_fill_color=[255, 255, 255],
+                  get_line_color=[11, 11, 11], line_width_min_pixels=3,
+                  stroked=True, radius_min_pixels=8, radius_max_pixels=11,
+                  get_radius=250, pickable=False))
+
 deck = pdk.Deck(
     layers=[
         pdk.Layer("PolygonLayer", cells, id="cells", get_polygon="polygon",
@@ -505,7 +592,7 @@ deck = pdk.Deck(
                   line_width_min_pixels=2, stroked=True, radius_min_pixels=6,
                   radius_max_pixels=9, get_radius=200, pickable=True,
                   auto_highlight=True),
-    ],
+    ] + map_layers,
     initial_view_state=pdk.ViewState(latitude=19.12, longitude=72.95, zoom=9.2),
     map_style="light",
     tooltip={"html": "<div style='font-weight:600;margin-bottom:2px'>{title}</div>"
@@ -560,10 +647,116 @@ if sel:
             picked = (layer, objs[layer][0])
             break
 
+def cell_estimate(i, cell_lat, cell_lon):
+    """The estimate, health guidance and provenance for one grid cell.
+
+    Shared by the map-click path and the my-location path so both give the same
+    answer in the same words.
+    """
+    v, sd = flat_v[i], flat_s[i]
+    masked, k = bool(flat_m[i]), int(flat_k[i])
+    aqi, cat = aqi_from_pm25(v)
+
+    if masked:
+        st.warning(f"**No estimate here - {REASON_SHORT[k].lower()}.**\n\n"
+                   f"{REASON_LONG[k]}")
+        # A refusal on its own is unhelpful when a real monitor is close by, so
+        # offer the nearest actual measurement. It is a reading, not an estimate
+        # for this square, and is labelled as such.
+        near, _, _ = contributions(cell_lat, cell_lon, readings, stations,
+                                   card["idw_power"], top_n=1)
+        if len(near):
+            r = near.iloc[0]
+            n_aqi, n_cat = aqi_from_pm25(r["reading"])
+            st.markdown(
+                f"The nearest monitor is **{r['site']}**, {r['km']:.1f} km away, "
+                f"currently reading **AQI {n_aqi} - {n_cat}** "
+                f"({r['reading']:.0f} ug/m3). That is a measurement at the "
+                f"monitor, not an estimate for this square.")
+            st.caption(CPCB_SOURCE)
+        return
+
+    diff = v - centre
+    if abs(diff) < 1:
+        comparison = "about the same as the citywide middle this hour"
+    else:
+        comparison = (f"{abs(diff):.0f} ug/m3 "
+                      f"{'dirtier' if diff > 0 else 'cleaner'} than the "
+                      f"citywide middle this hour")
+    st.markdown(
+        f"**AQI {aqi} - {cat}** &nbsp;·&nbsp; {v:.0f} ug/m3 PM2.5, "
+        f"could be {sd:.0f} higher or lower.\n\n"
+        f"That is {comparison} (AQI {centre_aqi}, {centre_cat}).\n\n"
+        f"**Health guidance ({cat}):** {CPCB_HEALTH[cat]}")
+    st.caption(CPCB_SOURCE)
+
+    con, share, n_all = contributions(cell_lat, cell_lon, readings, stations,
+                                      card["idw_power"])
+    st.markdown("**Which monitors this number came from**")
+    st.dataframe(pd.DataFrame({
+        "Monitor": con["site"],
+        "Distance": con["km"].map("{:.1f} km".format),
+        "Its reading": [f"{r:.0f} ug/m3 (AQI {aqi_from_pm25(r)[0]})"
+                        for r in con["reading"]],
+        "Share of this estimate": con["weight"].map("{:.1f}%".format),
+    }), hide_index=True, width="stretch")
+    st.markdown(
+        f"These {len(con)} monitors together account for **{share:.0f}%** of "
+        f"the estimate. The other {n_all - len(con)} reporting monitors make "
+        f"up the remaining {100 - share:.0f}% in smaller shares - the "
+        f"calculation spreads weight deliberately widely, which is why this "
+        f"map stays close to a citywide average.")
+    st.caption(
+        "These shares are the actual weights used in the calculation. They "
+        "show where the number came from, not what caused the pollution: "
+        "our own testing found road, building and industry data do not "
+        "explain why one area differs from another.")
+
+
+# The located cell takes the panel when there is one; a map click still works
+# and is what the panel falls back to.
+if located is not None:
+    st.markdown("#### Air quality where you are")
+    state = located["state"]
+    if state == "waiting":
+        st.info("Waiting for your browser to share a location. If nothing "
+                "happens, your browser may be blocking it - the map and "
+                "everything else still work.")
+    elif state == "denied":
+        st.info("Location permission was declined, so nothing has changed. "
+                "Click any square on the map to get the same estimate for a "
+                "place of your choosing.")
+    elif state == "unavailable":
+        st.info(f"Your browser could not provide a location"
+                f"{' (' + located['message'] + ')' if located.get('message') else ''}. "
+                f"This happens on desktops without GPS or on an insecure "
+                f"connection. Click any square on the map instead.")
+    elif state == "outside":
+        st.warning(
+            f"**You are about {located['km']:.0f} km outside the area this map "
+            f"covers.** It spans the Mumbai metropolitan region only, so there "
+            f"is no estimate for where you are - a number here would be made "
+            f"up rather than interpolated.")
+    else:
+        acc = located.get("accuracy_m") or 0
+        cell_lat = float(lats[located["idx"] // len(lons)])
+        cell_lon = float(lons[located["idx"] % len(lons)])
+        cell_estimate(located["idx"], cell_lat, cell_lon)
+        st.caption(
+            f"Matched to the {meta['cell_km']:.1f} km square containing your "
+            f"position"
+            + (f", located to about {acc:.0f} m" if acc else "") + ". Your "
+            f"coordinates are used to pick that square and nothing else: they "
+            f"are not saved, logged, or put in the page address, and they are "
+            f"gone when you close the tab. They do reach this app's server, "
+            f"because the estimate is computed there.")
+    st.divider()
+
 if picked is None:
-    st.markdown("#### Why this number?")
-    st.markdown("Click any square or monitor on the map to see exactly which "
-                "monitors produced its estimate.")
+    if located is None:
+        st.markdown("#### Why this number?")
+        st.markdown("Click any square or monitor on the map to see exactly "
+                    "which monitors produced its estimate.")
 elif picked[0] == "monitors":
     obj = picked[1]
     st.markdown(f"#### {obj.get('line3', 'This monitor')}")
@@ -578,50 +771,8 @@ elif picked[0] == "monitors":
         st.caption(CPCB_SOURCE)
 else:
     obj = picked[1]
-    i = int(obj["idx"])
-    v, sd, m, k = flat_v[i], flat_s[i], bool(flat_m[i]), int(flat_k[i])
-    aqi, cat = aqi_from_pm25(v)
     st.markdown("#### Why this number?")
-
-    if m:
-        st.warning(f"**No estimate here - {REASON_SHORT[k].lower()}.**\n\n{REASON_LONG[k]}")
-    else:
-        diff = v - centre
-        if abs(diff) < 1:
-            comparison = "about the same as the citywide middle this hour"
-        else:
-            comparison = (f"{abs(diff):.0f} ug/m3 "
-                          f"{'dirtier' if diff > 0 else 'cleaner'} than the "
-                          f"citywide middle this hour")
-        st.markdown(
-            f"**AQI {aqi} - {cat}** &nbsp;·&nbsp; {v:.0f} ug/m3 PM2.5, "
-            f"could be {sd:.0f} higher or lower.\n\n"
-            f"That is {comparison} (AQI {centre_aqi}, {centre_cat}).\n\n"
-            f"**Health guidance ({cat}):** {CPCB_HEALTH[cat]}")
-        st.caption(CPCB_SOURCE)
-
-    if not m:
-        con, share, n_all = contributions(float(obj["lat"]), float(obj["lon"]),
-                                          readings, stations, card["idw_power"])
-        st.markdown("**Which monitors this number came from**")
-        st.dataframe(pd.DataFrame({
-            "Monitor": con["site"],
-            "Distance": con["km"].map("{:.1f} km".format),
-            "Its reading": [f"{r:.0f} ug/m3 (AQI {aqi_from_pm25(r)[0]})"
-                            for r in con["reading"]],
-            "Share of this estimate": con["weight"].map("{:.1f}%".format),
-        }), hide_index=True, width="stretch")
-        st.markdown(
-            f"These {len(con)} monitors together account for **{share:.0f}%** of "
-            f"the estimate. The other {n_all - len(con)} reporting monitors make "
-            f"up the remaining {100 - share:.0f}% in smaller shares - the "
-            f"calculation spreads weight deliberately widely, which is why this "
-            f"map stays close to a citywide average.")
-        st.caption(
-            "These shares are the actual weights used in the calculation. They "
-            "show where the number came from, not what caused the pollution: "
-            "our own testing found road, building and industry data do not "
-            "explain why one area differs from another.")
+    cell_estimate(int(obj["idx"]), float(obj["lat"]), float(obj["lon"]))
 
 # ---------------------------------------------------------------- model card
 st.divider()

@@ -514,6 +514,39 @@ def grid_masks():
                      if k.startswith("kind_")}}
 
 
+def station_cells(bbox, n):
+    """Flat indices of the grid cells that contain a monitor.
+
+    Cells tile the bbox and their centres sit at half-cell offsets, so the
+    nearest centre is the containing cell.
+    """
+    feat = pd.read_parquet(FEATURES_PATH)
+    lats, lons = grid_axes(bbox, n)
+    i = np.abs(feat["lat"].to_numpy()[:, None] - lats[None, :]).argmin(axis=1)
+    j = np.abs(feat["lon"].to_numpy()[:, None] - lons[None, :]).argmin(axis=1)
+    return np.unique(i * n + j)
+
+
+def clear_station_cells(kind, bbox, n):
+    """Force cells that contain a monitor in-range. Returns (kind, n_cleared).
+
+    The mask exists to flag places with no comparable training data. A cell with
+    a monitor standing in it has ground truth by definition, so refusing to
+    estimate there is incoherent whatever the land-use features say.
+
+    It is not a hypothetical. At 2.3 km cells the mask is evaluated at the cell
+    centre, which can sit most of a kilometre from the monitor, and a min-max
+    band has no tolerance at its own edge: the Bandra Kurla Complex cell was
+    excluded for road density of 28.99 against a training maximum of 28.98,
+    a margin of 0.035%. The fix is this rule rather than a percentage
+    tolerance, which would be an arbitrary number chosen to make one case pass.
+    """
+    idx = station_cells(bbox, n)
+    cleared = int((kind[idx] != MASK_NONE).sum())
+    kind[idx] = MASK_NONE
+    return kind, cleared
+
+
 def write_grid_masks(resolutions=GRID_RESOLUTIONS, band=("min", "max")):
     """Bake the extrapolation mask for each resolution the app offers.
 
@@ -529,8 +562,17 @@ def write_grid_masks(resolutions=GRID_RESOLUTIONS, band=("min", "max")):
         lats, lons = grid_axes(bbox, n)
         glon, glat = np.meshgrid(lons, lats)
         _, kind, reasons = extrapolation_mask(glat.ravel(), glon.ravel(), bounds, band)
+        kind, cleared = clear_station_cells(kind, bbox, n)
         payload[f"kind_{n}"] = kind.reshape(n, n).astype(np.int8)
-        meta["reasons"][str(n)] = {k: int(v) for k, v in reasons.items()}
+        # The per-feature counts still describe why cells fell outside the band,
+        # before the monitor override; the aggregates the app displays are
+        # recounted from the mask that actually ships.
+        counts = {k: int(v) for k, v in reasons.items()}
+        counts["_empty"] = int((kind == MASK_EMPTY).sum())
+        counts["_remote"] = int((kind == MASK_REMOTE).sum())
+        counts["_other"] = int((kind == MASK_OTHER).sum())
+        counts["_station_cells_cleared"] = cleared
+        meta["reasons"][str(n)] = counts
     payload["meta"] = np.array(json.dumps(meta))
     GRID_MASK_PATH.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(GRID_MASK_PATH, **payload)
@@ -665,6 +707,8 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
         # Falls through to the OSM layers: a resolution or band nobody baked.
         mask, kind, reasons = extrapolation_mask(flat_lat, flat_lon,
                                                  p["bounds"], band)
+        kind, _ = clear_station_cells(kind, bbox, n)
+        mask = kind != MASK_NONE
 
     if readings is not None:
         row = (pd.Series(readings, dtype=float)

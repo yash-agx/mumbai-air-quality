@@ -12,3 +12,6 @@ numpy==2.5.2
 pyarrow==25.0.1
 requests==2.34.2
 python-dotenv==1.2.3
+# Browser geolocation for the "Use my location" button. 12 KB wheel,
+# streamlit is its only dependency, static HTML component (no JS build).
+streamlit-js-eval==1.0.0
