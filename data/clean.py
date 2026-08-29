@@ -10,6 +10,7 @@ import sys
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -73,6 +74,30 @@ PROXIMITY_WARN_KM = 1.0
 # --------------------------------------------------------------------------
 EXCLUDE_STATIONS = {8039}
 
+# --------------------------------------------------------------------------
+# ARTEFACT SCREEN
+#
+# VALID_RANGE only catches the physically absurd. Two narrower rules catch
+# faults that sit inside it, each justified by something in the data rather
+# than by a round number:
+#
+#   saturation   985.0 is the exact maximum at five unrelated stations (Sion,
+#                Borivali East, Airport T2, Mahape, Khadakpada). Independent
+#                sensors do not agree on a maximum to one decimal place unless
+#                it is a ceiling they are all pinned against.
+#
+#   lone spike   A reading above SPIKE_MIN while the median of every other
+#                reporting station that hour is below SPIKE_REGIONAL_MAX.
+#                PM2.5 episodes are regional -- a stagnant winter night lifts
+#                the whole basin. One station at 690 with the rest of the city
+#                at 23 is a sensor, not weather. The corroboration is what does
+#                the work here: a high reading that the city agrees with is
+#                kept no matter how high it goes.
+# --------------------------------------------------------------------------
+SATURATION_VALUE = 985.0
+SPIKE_MIN = 150.0
+SPIKE_REGIONAL_MAX = 50.0
+
 # A sensor stuck on one reading repeats it hour after hour. Runs are measured
 # in unbroken hours: an outage ends a run, because a station reading 41.0
 # before a two-week silence and 41.0 after it was not stuck for two weeks.
@@ -124,6 +149,48 @@ def stuck_cost(df, lengths, stuck):
     return cost.sort_values("masked_h", ascending=False)
 
 
+def other_station_median(df, candidates):
+    """Median across every station but this one, for each candidate reading.
+
+    Computed leave-one-out and only for candidates, which is both exact and
+    cheap: a few thousand rows rather than the whole panel.
+    """
+    hours = df[df["timestamp"].isin(set(candidates["timestamp"]))]
+    by_hour = {t: g.to_numpy() for t, g in hours.groupby("timestamp")["value"]}
+    out = np.empty(len(candidates))
+    for i, (t, v) in enumerate(zip(candidates["timestamp"], candidates["value"])):
+        vals = by_hour[t]
+        rest = np.delete(vals, np.argmax(vals == v))
+        # Nothing to corroborate against: keep the reading rather than delete
+        # what we cannot show is wrong. NaN fails the < comparison downstream.
+        out[i] = np.median(rest) if len(rest) else np.nan
+    return out
+
+
+def artefact_screen(df):
+    """Drop saturated readings, then uncorroborated spikes. Returns (df, report)."""
+    rep = {}
+    sat = df["value"] == SATURATION_VALUE
+    rep["saturation"] = int(sat.sum())
+    rep["saturation_stations"] = int(df.loc[sat, "station_id"].nunique())
+    df = df[~sat]
+
+    cand = df[df["value"] > SPIKE_MIN]
+    rep["above_spike_min"] = len(cand)
+    if len(cand):
+        med = other_station_median(df, cand)
+        lone = cand.index[(med < SPIKE_REGIONAL_MAX)]
+        rep["uncorroborated"] = int(np.isnan(med).sum())
+        rep["lone_spike"] = len(lone)
+        rep["lone_spike_stations"] = int(df.loc[lone, "station_id"].nunique())
+        rep["survivors"] = df.loc[cand.index.difference(lone)].copy()
+        df = df.drop(index=lone)
+    else:
+        rep.update(uncorroborated=0, lone_spike=0, lone_spike_stations=0,
+                   survivors=df.iloc[:0].copy())
+    return df, rep
+
+
 def clean(raw):
     n0 = len(raw)
     report = {}
@@ -165,6 +232,11 @@ def clean(raw):
         lambda n: pd.Series(split_name(n)))
     df["cv_group"] = df["station_id"].map(CV_STATION_GROUPS).fillna(
         df["station_id"].astype(str))
+
+    # Screen artefacts before the stuck mask, so a sensor pinned at 985.0 is
+    # reported as the saturation it is rather than as a stuck run.
+    df, art = artefact_screen(df)
+    report["artefact"] = art
 
     df = df.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
 
@@ -254,6 +326,11 @@ def main():
           f"(outside {VALID_RANGE[0]}-{VALID_RANGE[1]} ug/m3)")
     print(f"  dup hours     -{rep['duplicate_hours']:,}   "
           f"(overlapping sensors, averaged)")
+    a = rep["artefact"]
+    print(f"  saturation    -{a['saturation']:,}   "
+          f"(exactly {SATURATION_VALUE:g} ug/m3 at {a['saturation_stations']} stations)")
+    print(f"  lone spikes   -{a['lone_spike']:,}   "
+          f"(>{SPIKE_MIN:g} while other stations' median <{SPIKE_REGIONAL_MAX:g})")
     print(f"  stuck runs    -{rep['stuck_masked']:,}   "
           f"(one value repeated {STUCK_RUN_HOURS}h+ unbroken, masked)")
     print(f"rows out        {rep['rows_out']:,}")
@@ -310,6 +387,32 @@ def main():
         print(f"  {cost['masked_h'].sum():>6,}   total")
     else:
         print(f"\nNo station repeats a value for {STUCK_RUN_HOURS}h+ of unbroken hours.")
+
+    print("\n" + "-" * 92)
+    surv = a["survivors"]
+    print("REGIONAL EPISODES KEPT  (the check that the screen removed faults, not weather)")
+    print("-" * 92)
+    print(f"readings above {SPIKE_MIN:g} ug/m3: {a['above_spike_min']:,} considered, "
+          f"{a['lone_spike']:,} dropped as lone spikes, {len(surv):,} kept as corroborated")
+    if a["uncorroborated"]:
+        print(f"  {a['uncorroborated']:,} could not be checked (no other station "
+              f"reporting that hour) and were kept")
+    if not surv.empty:
+        hourly = df.groupby("timestamp")["value"].median()
+        print(f"  kept readings span {surv['value'].min():.0f}-{surv['value'].max():.0f} "
+              f"ug/m3 across {surv['station_id'].nunique()} stations "
+              f"and {surv['timestamp'].nunique():,} distinct hours")
+        print(f"  city-wide median across all hours peaks at {hourly.max():.0f} ug/m3; "
+              f"{int((hourly >= 75).sum()):,} hours sit at or above 75")
+        by_month = (surv.assign(month=surv["timestamp"].dt.tz_convert("Asia/Kolkata")
+                                .dt.strftime("%Y-%m"))
+                        .groupby("month").size())
+        print("  kept high readings by month (Mumbai's season runs Nov-Feb):")
+        for month, n in by_month.items():
+            print(f"    {month}  {n:>5,}  {'#' * min(60, int(n / max(1, by_month.max() / 60)))}")
+    else:
+        print("  WARNING: no reading above the threshold survived - the screen is "
+              "removing real episodes, not just faults.")
 
     print(f"\nWrote {len(df):,} rows to {CLEAN_PATH.relative_to(ROOT)}")
 
