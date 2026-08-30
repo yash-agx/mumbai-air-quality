@@ -183,7 +183,7 @@ Tests are permutation-based (20,000 draws, seed 0): Spearman ρ for the linear s
 Mardia's rank-based circular–linear R for the circular ones. n is small and the distance
 features are heavily skewed, so an asymptotic null would not be trustworthy.
 
-### Control: shape similarity *does* decay with distance — where on the full record it did not
+### Control: shape similarity decays with distance in the common window — and only there
 
 This is the one place where the swap changes a conclusion rather than a number, so it gets
 stated rather than absorbed.
@@ -209,19 +209,16 @@ separation, and falls monotonically across every bin:
 
 **On the full record the identical test gives +0.053, p = 0.518 — flat, with no bin
 structure at all.** Same monitors, same statistic, same code; only the window differs.
-That is a large reversal and I cannot resolve it with what is here. Two readings:
 
-- the decay is real and the full record conceals it, because an 18-month profile averages
-  two circulation regimes whose spatial gradients differ, and mixing them cancels the
-  gradient out; or
-- the decay is a product of the window's seasonality — Mar–Aug is monsoon-dominated, and a
-  single coherent regional flow can impose a distance gradient that is about weather
-  rather than about place.
-
-One argument favours the first. The common-window profiles rest on a third of the data and
-are measurably noisier (every split-half reliability below drops). Noise attenuates
-correlations toward zero, so a *noisier* estimate showing a *stronger* spatial signal is
-not the shape a noise artefact takes. Suggestive, not conclusive.
+**The decay does not generalise beyond this window.** The same calendar months one year
+earlier — Mar 10 – Aug 27, 2025, same monitors, same length — give **−0.046, p = 0.59**, and
+**every seasonal block in the record is flat**, including both of the blocks this window is
+built from. No rolling 180-day window anywhere else in the 18 months reaches half of −0.215.
+So the supportable claim is the narrow one: shape similarity decays with distance *inside
+this window*, and nowhere else in the record. That is a property of the span, not an
+established property of the network. Chased in full under "Chasing the Mantel disagreement"
+below, which also rules out three compositional explanations — including the seasonality
+reading this section originally offered.
 
 **What it does to the tests below.** The features are themselves spatially structured,
 several of them strongly:
@@ -484,9 +481,14 @@ analysis has not touched.
   (Mantel −0.215, p = 0.0009), so the three spatially structured features have
   anticonservative p-values. Harmless for the nulls, which it can only have made harder to
   achieve; not harmless for anything in the exploratory grid.
-- **The control's verdict is window-dependent, which is its own problem.** Flat on the full
-  record, decaying on the window. One of those two is being produced by the seasonal
-  composition of its span and there is nothing here that says which.
+- **The control's verdict is window-dependent, and the window is the odd one out.** Flat on
+  the full record, decaying on the common window. The decay does not replicate in the same
+  calendar months a year earlier (−0.046, p = 0.59, same monitors and same length) and every
+  seasonal block in the record is flat, so the flat result is the better-supported one — and
+  it is the version the headline section's correlation-length reading rests on. Not a clean
+  close: the window's decay survives every internal check, and nothing identifies what was
+  physically different about Mar–Aug 2026. Chased in full under "Chasing the Mantel
+  disagreement".
 - **Two of four primary directions are unstable.** `dist_industrial_m` × balance flips sign
   and `building_density_500m` × swing collapses between the two windows. The point-estimates
   should not be read as weak evidence of anything, in either direction.
@@ -821,9 +823,9 @@ more consequential than it is.** The control exists to decide whether the four p
 p-values are anticonservative. The conservative choice is to keep assuming they may be. All
 four primary tests are null, and a null under a test biased toward false positives is a
 stronger null, not a weaker one. **The four primary conclusions in the section above stand
-exactly as written.** What changes is the *description* of the control, and the fact that
-the previous section's phrase "shape similarity **does** decay with distance" is not
-supportable on this evidence.
+exactly as written.** What changes is the *description* of the control: shape similarity
+decays with distance in this window and nowhere else in the record, and the section above
+has been corrected to say exactly that.
 
 ### Flags — what makes the above weaker than it looks
 
@@ -981,14 +983,25 @@ The current rule is a *floor* on the regional median. A *ratio* test — flag wh
 
 **Three stations came online March 2026.** Kalu Nagar, Vithalwadi, Chinchpada — ~25–28% coverage each. Fine for recent predictions, useless for training on 2025 data. Consider whether to include them at all. They are also what forces the diurnal–landuse analysis onto a common Mar-2026-on window, at the cost of the whole pollution season.
 
-**OPEN: does diurnal shape decay with distance, or doesn't it?** The Mantel control in the
-land-use section gives opposite answers on the two windows — flat on the full record
-(r = +0.053, p = 0.518), clearly decaying on the primary common window (r = −0.215,
-p = 0.0009), same monitors and same code. One of the two is an artefact of its span's
-seasonal composition and nothing here says which. It matters beyond that section: the
-"correlation length shorter than the network's spacing" reading of the headline result
-leans on the flat version. Worth resolving with a season-matched comparison — the same
-calendar months in 2025 and 2026 — before either version is quoted again.
+**~~OPEN~~ ANSWERED: does diurnal shape decay with distance, or doesn't it?** Not in any
+general sense — the decay is confined to the common window. The season-matched comparison
+this entry asked for was run in `scripts/04_mantel_window.py`; see "Chasing the Mantel
+disagreement" in the land-use section for the full chase.
+
+The same calendar months one year earlier (Mar 10 – Aug 27, 2025, same monitors, same
+length) give **−0.046, p = 0.59** against the window's −0.215, every seasonal block in the
+record is flat, and no rolling 180-day window anywhere else in the 18 months reaches half
+the window's value. Three compositional explanations for the disagreement were tested and
+all fail: span mismatch across the record, the seasonal identity of the span, and
+within-window seasonal coverage weighting.
+
+**What it means for the headline result:** the "correlation length shorter than the
+network's spacing" reading leans on the flat version, and the flat version is the one that
+holds everywhere except that single span — so that reading is better supported than it
+looked, not worse. Two caveats keep this from being a clean close: the window's decay
+survives every *internal* check (bootstrap CI excluding zero, no influential monitor or
+pair), so something real is happening in that span; and nothing identifies what is
+physically different about Mar–Aug 2026, so "period-specific" is a label, not a mechanism.
 
 **OPEN: the sea-breeze hypothesis, for a real pre-registration.** The land-use tests above
 are all null, but one exploratory variant — `dist_coast_m` against a trough hour taken from a
