@@ -521,6 +521,354 @@ monitors this analysis has not touched.
 
 ---
 
+## Chasing the Mantel disagreement: the aliasing hypothesis is wrong, and the control is worse than unresolved
+
+`scripts/04_mantel_window.py` reproduces everything in this section. It only reads the
+panel — it changes no test in `03_diurnal_landuse.py` and writes no data.
+
+The section above left the control split down the middle: **+0.053 (p = 0.518) on the full
+record, −0.215 (p = 0.0009) on the common window**, same monitors, same code. The stated
+reading was that one of the two spans is producing its answer through its seasonal
+composition and nothing on hand said which. This section went looking, with a specific
+hypothesis to kill, and killed it — then found the answer is not the other option either.
+
+### The seasonal-aliasing hypothesis, tested directly and refuted
+
+**Hypothesis.** On the full record, monitors average different slices of the year — three
+came online in March 2026 — and that mismatch adds noise to every pair, attenuating Mantel
+toward zero. If true, the flat full-record result is the artefact and the window's decay
+is the real thing.
+
+**The test is one line: drop the three late arrivals and rerun the full record on the 36
+monitors whose spans already match.** If the mismatch is doing the work, the decay appears.
+
+| configuration | r | p | pairs | monitors |
+|---|---|---|---|---|
+| full record, all 39 | +0.053 | 0.518 | 737 | 39 |
+| **full record, 36 span-matched** | **+0.058** | **0.512** | 627 | 36 |
+| common window, all 39 | −0.215 | 0.0009 | 737 | 39 |
+| common window, same 36 | −0.157 | 0.031 | 627 | 36 |
+
+**Removing the span mismatch moves the full record by +0.005.** The hypothesis is dead. The
+mismatch it names is also just small: a median pair differs by 2.8 percentage points of
+monsoon share (90th percentile 19), and `Mantel(|mismatch|, distance)` = +0.145, p = 0.126,
+so it is not spatially arranged in a way that could have hidden a gradient either.
+
+Two things fall out of that table that were not being said before:
+
+- **The window's own result is partly carried by the three late arrivals** — −0.215 on 39
+  monitors against −0.157 on the matched 36. Those three are the only monitors that exist
+  *nowhere else in the record*, so the 39-monitor number is the one figure here that cannot
+  be compared to any other span. Every sweep and block below therefore uses the 36.
+- The full record is not a blurred mixture of regimes. **It is a winter profile**: winter
+  hours carry ~8× the diurnal amplitude (10.27 vs 1.21 µg/m³), so they dominate the
+  18-month mean, and the full-record shape correlates at **r = 0.87** with the winter-only
+  shape. There is nothing about the full record left to explain by averaging.
+
+### Coverage imbalance inside the window is not the mechanism either
+
+The section above kills aliasing *across* the record. The same idea has a finer version
+*inside* the window: monitors do not all cover the window's pre-monsoon half (Mar 10 – May
+31, 1,901 h) and its monsoon half (Jun 1 – Aug 27, 2,000 h) in the same proportion, so a
+pooled hour-of-day mean weights the two seasons differently at different monitors. If that
+imbalance were spatially arranged, it could produce a distance gradient by itself.
+
+**The imbalance is small.** Each monitor's pre-monsoon share of its own valid in-window
+hours: median **0.492**, mean 0.491, sd 0.097, **IQR 0.482–0.510**. The distribution is
+tight around an even split, with a short tail — three monitors sit near 0.66 (6965, 6948,
+6956) and one, `3409322`, is effectively monsoon-only inside the window (2 valid
+pre-monsoon hours against 1,259).
+
+**And it is not spatially arranged.** Mantel of the pairwise share difference against
+distance:
+
+| panel | r | p | pairs |
+|---|---|---|---|
+| all 39 | −0.109 | 0.290 | 737 |
+| 36 span-matched | −0.087 | 0.445 | 627 |
+
+Median pairwise |share difference| is **0.028** (90th percentile 0.178). **The sign matters
+here and is worth stopping on:** to manufacture a decay you would need *more* coverage
+mismatch at *longer* separation — a **positive** r. The observed r is negative, so whatever
+the imbalance is doing, it works against the decay rather than producing it.
+
+**The direct test: rebuild the profiles at fixed seasonal weights instead of pooling
+hours.** For each monitor, compute the pre-monsoon and monsoon hour-of-day profiles
+separately, then combine them at weights fixed by construction rather than by whatever
+coverage the monitor happens to have. That removes the imbalance channel entirely, whether
+or not it correlates with distance.
+
+`3409322` has no pre-monsoon profile to reweight, so it cannot enter any reconstruction; it
+is dropped from **all four arms** so the numbers are like-for-like on an identical monitor
+set.
+
+| construction | all monitors (n = 38) | 36 span-matched (n = 35) |
+|---|---|---|
+| **A.** pooled hours *(what `03_` does)* | **−0.2196** (p = 0.0006) | **−0.1608** (p = 0.030) |
+| **B.** fixed 50/50 pre-monsoon : monsoon | −0.2064 (p = 0.0012) | −0.1367 (p = 0.066) |
+| **C.** fixed equal weight per calendar month | −0.2386 (p = 0.0002) | −0.1643 (p = 0.026) |
+| **D.** *placebo* — reweighted to own observed shares | −0.2162 (p = 0.0009) | −0.1571 (p = 0.037) |
+
+**The decay does not disappear. It barely moves.** Fixed 50/50 weights retain **94%** of the
+pooled estimate on the full set (85% on the span-matched), and the finer monthly control —
+equal weight to each of Mar, Apr, May, Jun, Jul, Aug, which does not depend on where the
+monsoon boundary is drawn — retains **109%** (102%), i.e. slightly *strengthens* it.
+
+Two checks that stop this being a null result about nothing:
+
+- **The placebo works.** Reweighting to each monitor's *own observed* shares reproduces the
+  pooled arm to within 0.0035, which is what confirms the reweighting machinery is wired up
+  correctly rather than quietly returning the input.
+- **The reconstruction is not a no-op.** Per-monitor correlation between the pooled shape
+  and the equal-weight shape is a median 0.9983 but ranges down to 0.9588, and
+  Spearman(|share − 0.5|, how far the shape moved) = **+0.591, p = 0.0001**. The reweighting
+  bites hardest on exactly the imbalanced monitors, as it should. It simply does not move
+  the Mantel.
+
+**So: seasonal-coverage imbalance inside the window is not the mechanism.** Coverage is
+already near-balanced, the residual mismatch is not spatially arranged, and holding the
+seasonal weights fixed by construction leaves the decay intact. That is now the *third*
+compositional explanation ruled out — span mismatch across the record, seasonal identity of
+the span, and within-window coverage weighting — and the anomaly of Mar–Aug 2026 survives
+all three.
+
+Two caveats on this subsection specifically:
+
+- **It rules out a weighting artefact, not a seasonal one.** Fixed weights fix *how much*
+  each season contributes; they cannot fix the fact that both contributing seasons are
+  drawn from 2026. The Mar–Aug 2025 non-replication above remains the binding evidence.
+- **B is the weaker arm and its p drifts to 0.066 on the span-matched panel.** With 35
+  monitors that is a change in significance without much change in estimate (−0.161 →
+  −0.137), which is exactly the instability flagged elsewhere in this section; it should not
+  be read as the fixed-weight version "failing".
+
+### Mantel within seasonal blocks: every season is flat, including both halves of the window
+
+Asked of every season the record contains, not only the two inside the window, on the 36
+span-matched monitors:
+
+| block | hours | r | p |
+|---|---|---|---|
+| 2025 Mar–May pre-monsoon | 2,085 | +0.011 | 0.90 |
+| 2025 Jun–Aug monsoon | 2,143 | −0.128 | 0.11 |
+| 2025 Sep–Oct post-monsoon | 1,432 | +0.087 | 0.34 |
+| 2025–26 Nov–Feb **winter** | 2,504 | −0.067 | 0.48 |
+| 2026 Mar–May pre-monsoon | 2,108 | −0.039 | 0.64 |
+| 2026 Jun–Aug monsoon | 2,000 | +0.047 | 0.62 |
+| *pooled* Jun–Aug both years | 4,143 | −0.046 | 0.60 |
+| *pooled* Nov–Feb | 2,526 | −0.066 | 0.48 |
+
+**Not one block reproduces the decay, and the two blocks the common window is built from
+are among the flattest.** The window is Mar 10 – Aug 27; its pre-monsoon half gives −0.039
+and its monsoon half +0.047, yet together they give −0.157. The decay is not a within-season
+property that averaging across seasons destroys — it is the opposite, something that only
+appears when that particular pair of blocks is averaged together.
+
+**And then the test that decides it — the same calendar months, one year earlier:**
+
+| span | hours | monitors | r | p |
+|---|---|---|---|---|
+| **Mar 10 – Aug 27, 2025** | 3,916 | 36 | **−0.046** | **0.59** |
+| Mar 10 – Aug 27, 2026 *(the window)* | 3,901 | 36 | −0.157 | 0.031 |
+| Sep 2025 – Feb 2026 | 3,936 | 36 | −0.014 | 0.88 |
+
+Same months, same monitors, same length, one year apart, and the decay does not replicate.
+**So it is not a property of Mar–Aug, and the "monsoon imposes a coherent regional flow"
+reading offered in the section above is now specifically ruled out** — 2025's monsoon had
+the same opportunity and shows nothing.
+
+**This is not attenuation from the shorter span.** Halving the window keeps the effect:
+odd days only (1,960 h) give −0.201, and 20 random half-window day-subsets give a median
+−0.145 with **20 of 20 negative**. A ~2,000-hour slice of the window keeps the decay; whole
+2,000-hour blocks elsewhere never had it.
+
+### The window sweep: a broad basin, sitting exactly on the pre-specified date
+
+Start date swept with the end fixed, 36 span-matched monitors:
+
+| start | hours | r | p |
+|---|---|---|---|
+| 2025-12-20 | 5,472 | +0.099 | 0.27 |
+| 2026-01-29 | 4,761 | +0.021 | 0.81 |
+| 2026-02-28 | 4,131 | −0.105 | 0.13 |
+| 2026-03-07 | 3,968 | −0.155 | 0.027 |
+| **2026-03-10** *(the primary)* | 3,901 | **−0.157** | 0.030 |
+| 2026-03-20 | 3,675 | −0.145 | 0.054 |
+| 2026-03-30 | 3,438 | −0.107 | 0.16 |
+| 2026-04-29 | 2,747 | −0.042 | 0.62 |
+| 2026-05-29 | 2,072 | +0.009 | 0.93 |
+
+**It is a basin, not a knife-edge.** r declines smoothly from +0.10 at a December start,
+bottoms out over roughly 2026-03-04 → 2026-03-25 (three weeks at p < 0.07), and relaxes
+back to zero. It is essentially immune to the end date: with the start fixed at 2026-03-10
+every end date from 2026-05-01 to 2026-08-27 gives −0.126 to −0.155.
+
+**Two things about that basin should be stated rather than smoothed over.** First, the
+pre-specified start sits at the exact minimum of the sweep. That is not evidence of
+anything by itself — the date was fixed by the data-collection record, not chosen from the
+curve, and the section above already flagged the ordering problem honestly — but it is the
+most coincidental-looking fact in this analysis and a reader deserves to see it.
+
+Second, and more damaging: **rolling 180-day windows across the entire record range only
+from −0.082 to +0.110 (sd 0.057), and not one of them reaches half the window's value.**
+The only place in 18 months where this statistic goes meaningfully negative is the span
+that was selected as primary.
+
+### Jackknife: it is not a handful of monitors or pairs
+
+On the primary configuration (common window, all 39):
+
+- **Leave-one-monitor-out**, 39 refits: r from −0.262 to −0.180. All 39 stay negative;
+  largest single shift 0.048.
+- **Leave-one-cv-group-out**, 35 refits: −0.262 to −0.167. All negative.
+- **Leave-one-pair-out**, 737 refits: −0.220 to −0.210. Largest single-pair influence 0.005.
+- **Greedy adversarial pair removal** needs 9.9% of pairs deleted to reach zero. Calibrated
+  against synthetic data with a *genuine* r = −0.215 over 737 pairs, which needs 8.8%
+  (range 4.1–11.9%). **So the fragility is ordinary and tells us nothing either way** — this
+  calibration is the reason the number is reported instead of the raw 9.9% alone.
+- **Block bootstrap over days inside the window** (7-day blocks, 400 reps): 95% CI
+  **[−0.300, −0.100]**, 0% of reps ≥ 0.
+- Not a noise-shape artefact: `shape_of()` normalises by each profile's own SD, so a
+  monitor with no daily cycle contributes normalised noise — but the decay *strengthens*
+  when weak monitors are dropped (−0.300 at 24h amplitude ≥ 1.0, 34 monitors), and
+  amplitude is not spatially arranged (Mantel −0.054, p = 0.61).
+
+**Inside the window the decay is solid by every internal check.** That is a genuinely
+different claim from it being a property of the network, and the two coexist.
+
+One caveat the bin table in the section above obscures: the gradient is a **long-range
+contrast**. Regressing similarity on separation, the slope inside 20 km — where 387 of 737
+pairs sit — is −0.0020/km against −0.0078/km overall. "Similarity decays with distance"
+overstates the near field, which is the part that would matter for interpolation.
+
+### Diagnosing the phase reliability collapse: it is amplitude, not record length
+
+The section above reads split-half circular r falling 0.880 → 0.423 (ceiling 0.968 → 0.771)
+as the price of a third as much data. **That reading is wrong.** Sliding windows of fixed
+length across the record, on the 36 span-matched monitors:
+
+| window length | hours | split-half r | ceiling |
+|---|---|---|---|
+| 30 d | 704 | 0.552 | 0.843 |
+| 60 d | 1,366 | 0.671 | 0.896 |
+| 90 d | 2,062 | 0.721 | 0.916 |
+| **171 d** *(the window's own length)* | 3,839 | **0.790** | **0.940** |
+| 300 d | 6,690 | 0.801 | 0.943 |
+| 546 d *(full record)* | 12,294 | 0.863 | 0.963 |
+
+**At the common window's own length the typical window scores 0.79, ceiling 0.94. The
+common window scores 0.42.** Length does not explain it. Season does:
+
+| window | days | split-half r | ceiling | median 24h amp | monitors with no usable phase |
+|---|---|---|---|---|---|
+| common window Mar–Aug 2026 | 170 | 0.469 | 0.799 | 1.90 | 13/36 |
+| monsoon, both years pooled | 179 | 0.404 | 0.759 | 1.22 | 25/36 |
+| pre-monsoon Mar–May 2026 | 92 | 0.246 | 0.628 | 3.44 | 4/35 |
+| **winter Nov–Feb 2025–26** | **111** | **0.827** | **0.951** | **10.44** | **1/35** |
+| Sep 2025 – Feb 2026 *(has a winter)* | 172 | 0.781 | 0.936 | 7.50 | 1/36 |
+| 12 months Sep 2025 – Aug 2026 | 351 | 0.805 | 0.945 | 3.47 | 2/36 |
+| full record | 535 | 0.863 | 0.963 | 2.49 | 6/36 |
+
+**111 days of winter beat 179 days of monsoon and nearly match the whole 18 months.**
+
+**The mechanism, at monitor level.** The collapse is not 39 monitors getting uniformly
+noisier — it is **14 of 39 losing their daily cycle altogether**. In the common window 14
+monitors have a 24-hour harmonic amplitude under 1.5 µg/m³ and a median half-to-half phase
+gap of 2.19 h; the other 25 have a median gap of 1.06 h and among themselves reach
+**circular r = 0.854**. Spearman(phase gap, amplitude) = −0.418, p = 0.008. In the monsoon
+the median amplitude is 1.21 µg/m³ against winter's 10.27 — there is barely a diurnal cycle
+left to take the phase of.
+
+**What record length would make the trough-hour test informative?** Phase noise scales as
+1/(amplitude·√days), so amplitude sets the exchange rate:
+
+| season | median 24h amp | days needed for winter-equal phase precision |
+|---|---|---|
+| Nov–Feb winter | 10.27 | 1× |
+| Sep–Oct post-monsoon | 4.24 | 6× |
+| Mar–May pre-monsoon | 3.46 | 9× |
+| Jun–Aug monsoon | 1.21 | **72×** |
+
+So matching one winter season on monsoon data alone would take on the order of **34 years
+of monsoons**. **Length is the wrong lever.** Measured rather than extrapolated: a 172-day
+window that *contains* a Nov–Feb season reaches ceiling 0.936, against 0.799 for the
+170-day monsoon-weighted window and 0.963 for the entire record.
+
+**The answer, stated plainly: ~6 months of common record including one pollution season
+restores the trough test to a ~0.94 ceiling; 12 months buys 0.945 and removes the windowing
+choice entirely. No quantity of Mar–Aug does it. Concretely — the three March-2026 monitors
+need to reach roughly February 2027 before `dist_coast_m` × trough is worth running again.**
+
+### Which window I would trust for the control
+
+**The full record, +0.053 — with the control reported as UNRESOLVED, not as evidence of no
+spatial structure.**
+
+The case for the full record is that everything else in the record agrees with it: every
+seasonal block is flat, the winter block that dominates the 18-month average is flat, the
+same calendar months a year earlier are flat, no rolling window reaches half the window's
+value, and the aliasing hypothesis that was the stated reason for preferring the window is
+refuted outright. The common window's −0.215 is the single outlying span in eighteen months.
+
+The case for not calling it settled is that the window's decay survives every internal
+check — bootstrap CI excluding zero, no influential monitor or pair, strengthening when
+weak monitors are dropped. Something real is happening in that span. A period-specific
+circulation pattern would look exactly like this and would be a true fact about that period,
+just not a stable property of the network.
+
+**For `03_`'s actual purposes nothing changes, and this should be said before it reads as
+more consequential than it is.** The control exists to decide whether the four primary
+p-values are anticonservative. The conservative choice is to keep assuming they may be. All
+four primary tests are null, and a null under a test biased toward false positives is a
+stronger null, not a weaker one. **The four primary conclusions in the section above stand
+exactly as written.** What changes is the *description* of the control, and the fact that
+the previous section's phrase "shape similarity **does** decay with distance" is not
+supportable on this evidence.
+
+### Flags — what makes the above weaker than it looks
+
+- **This is one 18-month record with one winter and two monsoons.** "Does not replicate in
+  the same months a year earlier" rests on exactly one prior year. That is the strongest
+  single result here and it is n = 1.
+- **The Mantel permutation null conditions on the estimated profiles.** It asks whether a
+  random relabelling of monitors reproduces the pattern; it never asks how much r would move
+  on a different stretch of time. The sweep says: a lot — rolling-window sd is 0.057 against
+  a headline effect of 0.157. **p = 0.0009 is a precise answer to a much narrower question
+  than the one being asked of it,** and that gap is the main reason the control cannot be
+  called settled in either direction.
+- **Three compositional explanations are ruled out, which is not the same as one being
+  ruled in.** Span mismatch, seasonal identity of the span, and within-window coverage
+  weighting each fail to account for the decay. Nothing here proposes a mechanism that
+  does; "period-specific" remains a label.
+- **The seasonal blocks are individually underpowered.** Each is ~2,000 hours and a single
+  block's r has wide sampling error. The claim rests on all six pointing the same way plus
+  the length controls, not on any one of them.
+- **The window's r depends on which panel you use** — −0.215 on 39, −0.157 on 36 — and only
+  the 36-monitor version can be compared to anything else in the record. The headline number
+  in the previous section is the one that cannot be cross-checked.
+- **The amplitude story has a row that does not fit.** Pre-monsoon Mar–May 2026 has healthy
+  amplitude (3.44 µg/m³) and only 4 weak monitors, yet scores 0.246 — worse than either
+  monsoon block. Amplitude is the main lever, not the only one.
+- **0.423 is estimator-dependent.** Jammalamadaka's circular r weights by sin(deviation),
+  which flattens as deviations approach ±6 h. In the window the phases are nearly spread
+  round the clock (mean resultant length 0.311, against 0.589 on the full record), so the
+  statistic sits in its worst regime. Pearson on wrapped deviations gives 0.169 and Spearman
+  0.294 for the same data. **The direction of the collapse is solid; its magnitude is not,
+  and the 0.771 ceiling should be read as one estimator's answer.**
+- **`04_` splits odd/even on days since the record began**, where `03_` splits on
+  `dayofyear` parity, which double-counts a parity at the year boundary. This is why the
+  full record reads 0.855 here and 0.880 there. Immaterial, but the numbers should reconcile.
+- **The 72× figure is a scaling argument, not a measurement.** It assumes phase noise goes
+  as 1/(amplitude·√days) with independent days; day-to-day autocorrelation means the true
+  effective sample size is smaller, so 72× is a floor. The directly measured comparison —
+  0.936 for a 172-day window containing a winter against 0.799 without one — is the number
+  to rely on.
+- **Nothing here identifies what is physically different about Mar–Aug 2026.** The finding
+  is that the span is anomalous within this record, not why. Without that, "period-specific
+  fluctuation" is a label rather than an explanation.
+
+---
+
 ## For the README: the monitor network is sited unlike the city it measures
 
 81% of the Mumbai bounding box is masked as outside the training range. Worth stating plainly on the README, because the reason is not what it first looks like.
