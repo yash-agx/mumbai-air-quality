@@ -60,7 +60,7 @@ Pooled over 376,112 held-out station-hours across 35 folds:
 
 ## The finding: level is not spatially predictable, but timing is
 
-Two results that only make sense together. They explain the table above, and they point in opposite directions.
+Two results that only make sense together. They explain the table above, and they point in opposite directions. A third then asks *why* the second one holds, and comes back empty-handed.
 
 ### Hourly level: no spatial structure to exploit
 
@@ -105,6 +105,23 @@ The first row is a **noise ceiling**, and it is what makes the second row mean a
 The estimate reproduces the city's daily rhythm almost exactly and the local one not at all — the same mechanism as the flat variogram, but visible as a shape being flattened rather than a number being close.
 
 **Both halves together are the result.** At this network's spacing the hourly level is not spatially predictable, while diurnal timing is location-specific and reliably measurable — and the interpolation discards the second along with the first. Local timing requires measurement at that location; interpolating between monitors 1–40 km apart will not recover it. The app's time-patterns section plots the measured and estimated curves as separate series so the gap is visible rather than asserted.
+
+### Land use does not explain the timing — at least not detectably
+
+If each site has its own daily rhythm, the obvious next question is whether the land around it sets that rhythm. Four tests were fixed in advance, each pairing one OSM feature with one summary of profile shape, with Benjamini–Hochberg correction across the four. They are computed on the window over which all 39 monitors report, with the full record kept as a sensitivity check:
+
+| feature | shape summary | statistic | p | BH q |
+|---|---|---:|---:|---:|
+| `dist_coast_m` | trough hour | R = 0.363 | 0.106 | 0.372 |
+| `road_density_500m` | morning–evening balance | ρ = −0.229 | 0.186 | 0.372 |
+| `dist_industrial_m` | morning–evening balance | ρ = +0.091 | 0.598 | 0.797 |
+| `building_density_500m` | day–night swing | ρ = +0.027 | 0.875 | 0.875 |
+
+**None is significant, adjusted or not.** The unit of analysis is the cross-validation group rather than the station, so n = 35 rather than 39: near-coincident monitors are not independent observations of a land-use relationship, and counting them twice would understate every p-value.
+
+**This is a limit on what 35 monitors can detect, not a demonstration that land use is irrelevant.** A permutation test at n = 35 reaches 80% power only around |ρ| = 0.48, and a true correlation of 0.30 would be missed about two times in three. Every effect measured here falls well inside that blind spot. The honest statement is that land-use features at 500 m–1 km explain no part of diurnal shape *large enough for this network to see* — not that there is nothing to explain.
+
+**One control is unresolved, and it matters.** The tests assume diurnal shape is not itself spatially autocorrelated; if it were, a feature that is spatially structured could inherit geography's significance. A Mantel test on whether shape similarity decays with separation gives **opposite answers on the two time windows**. On the full 18-month record it is flat (r = +0.053, p = 0.518); on the common window it decays clearly (r = −0.215, p = 0.0009). Same monitors, same statistic, same code. One of the two is a product of the seasonal composition of its span and nothing here settles which, so the control is recorded as open rather than passed. `NOTES.md` has the full treatment, including the sensitivity tables and the pre-specification.
 
 ## Limitations
 

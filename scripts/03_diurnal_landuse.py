@@ -404,8 +404,19 @@ def main():
     keep = ~same_group
     r, p, npairs = mantel(sim, dist, keep)
     print(f"  Mantel r(shape similarity, distance) = {r:+.4f}  "
-          f"p = {p:.4f}  over {npairs} pairs")
+          f"p = {p:.4f}  over {npairs} pairs   [PRIMARY: common window]")
     print(f"  ({int(np.triu(same_group, 1).sum())} within-group pairs excluded)")
+
+    # The same test on the full record. It is reported because the two windows
+    # disagree outright -- flat on the full record, decaying on the common one,
+    # same monitors and same code -- and that disagreement is the control's
+    # actual status. Neither run resolves which window's answer is the artefact.
+    Sf = np.vstack([shape_of(prof_full.loc[s].to_numpy()) for s in sids])
+    rf, pf, _ = mantel(np.corrcoef(Sf), dist, keep)
+    print(f"  same test, full record            = {rf:+.4f}  "
+          f"p = {pf:.4f}   [SENSITIVITY]")
+    print(f"  -> the control does NOT give a stable answer across the two "
+          f"windows; see NOTES.md")
 
     iu = np.triu_indices(len(sids), 1)
     dv, sv, kv = dist[iu], sim[iu], keep[iu]
