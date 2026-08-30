@@ -22,6 +22,15 @@ Structure, fixed before any result was seen:
      anticonservative. Near-coincident pairs (same cv_group) are excluded --
      they are the one bin the variogram work already flagged as unexploitable.
 
+     It decays in this window (-0.215) and is flat on the full record (+0.053).
+     scripts/04_mantel_window.py chased that disagreement: the decay does NOT
+     generalise beyond this window. The same calendar months a year earlier give
+     -0.046 (p = 0.59) on the same monitors at the same length, every seasonal
+     block in the record is flat, and no rolling 180-day window elsewhere in the
+     18 months reaches half of it. Treat the four p-values below as possibly
+     anticonservative anyway -- that is the conservative reading, and all four
+     tests are null, which a false-positive bias only makes harder to achieve.
+
   2. PRIMARY. Four pre-specified feature x summary pairs, Benjamini-Hochberg
      across those four only:
        road_density_500m     x morning-evening balance
@@ -409,14 +418,17 @@ def main():
 
     # The same test on the full record. It is reported because the two windows
     # disagree outright -- flat on the full record, decaying on the common one,
-    # same monitors and same code -- and that disagreement is the control's
-    # actual status. Neither run resolves which window's answer is the artefact.
+    # same monitors and same code. 04_mantel_window.py resolved which way that
+    # cuts: the window's decay is the local result and does not generalise.
     Sf = np.vstack([shape_of(prof_full.loc[s].to_numpy()) for s in sids])
     rf, pf, _ = mantel(np.corrcoef(Sf), dist, keep)
     print(f"  same test, full record            = {rf:+.4f}  "
           f"p = {pf:.4f}   [SENSITIVITY]")
-    print(f"  -> the control does NOT give a stable answer across the two "
-          f"windows; see NOTES.md")
+    print("  -> the decay does NOT generalise beyond this window: the same "
+          "calendar months")
+    print("     a year earlier give -0.046 (p = 0.59), and every seasonal block "
+          "in the record")
+    print("     is flat. See scripts/04_mantel_window.py and NOTES.md.")
 
     iu = np.triu_indices(len(sids), 1)
     dv, sv, kv = dist[iu], sim[iu], keep[iu]
