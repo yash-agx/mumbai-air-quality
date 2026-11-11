@@ -8,8 +8,9 @@ near real time, which is what this module reads first.
 data.gov.in blocks requests from Streamlit Cloud's servers, so the deployed app
 cannot use it even with a valid key, while it works fine from India. WAQI is
 therefore tried as a fallback: it republishes the same CPCB stations, but as US
-AQI rather than ug/m3, so its values are converted back (see aqi_to_ugm3) and
-the source string says which feed the numbers came from.
+AQI rather than ug/m3. Each matched station's PM2.5 sub-index (iaqi.pm25) is
+read from its own feed and converted back to a concentration (see aqi_to_ugm3),
+and the source string says which feed the numbers came from.
 
 fetch_live() never raises. The app has to render something whatever the network
 or the upstream API is doing, so every failure comes back as a LiveResult with
@@ -17,6 +18,7 @@ ok=False and a message a non-technical reader can act on.
 """
 
 import os
+import time
 from dataclasses import dataclass, field, replace
 from math import asin, cos, radians, sin, sqrt
 
@@ -41,12 +43,24 @@ STALE_HOURS = 6
 # --------------------------------------------------------------------------
 # WAQI FALLBACK
 #
-# map/bounds returns every station WAQI holds inside a lat/lon box, which is
-# one request for the whole region. Same bbox as data/fetch.py and
-# scripts/02_features.py, given in WAQI's order: south, west, north, east.
+# Two steps. map/bounds lists every station WAQI holds inside a lat/lon box,
+# which gives each one's uid and coordinates in a single request; feed/@uid
+# then gives that station's per-pollutant sub-indices. The second step is what
+# we are after: map/bounds reports only the overall AQI, which is whichever
+# pollutant dominates there, while feed/@uid carries iaqi.pm25 specifically.
+#
+# That is one request per matched station, so up to 40 in total. They sit
+# behind the app's live-snapshot cache (LIVE_TTL, 15 minutes), so a page view
+# does not pay for them; WAQI_BUDGET_S stops the fan-out if the API is slow
+# enough that waiting would cost more than the readings are worth.
+#
+# Same bbox as data/fetch.py and scripts/02_features.py, in WAQI's order:
+# south, west, north, east.
 # --------------------------------------------------------------------------
 WAQI_BASE = "https://api.waqi.info"
 WAQI_BBOX = (18.85, 72.70, 19.40, 73.20)
+WAQI_FEED_TIMEOUT = 8
+WAQI_BUDGET_S = 25
 
 # WAQI's terms require attribution wherever its data is shown.
 WAQI_ATTRIBUTION = ("Air quality data from the World Air Quality Index project "
@@ -131,20 +145,46 @@ def _rows(key, city="Mumbai"):
         offset += PAGE
 
 
-def _waqi_rows(token):
-    """Every station WAQI holds inside the Mumbai bbox, in one request."""
-    lat1, lon1, lat2, lon2 = WAQI_BBOX
-    r = requests.get(
-        f"{WAQI_BASE}/map/bounds/",
-        params={"token": token, "latlng": f"{lat1},{lon1},{lat2},{lon2}"},
-        headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+def _waqi_get(path, params, timeout=TIMEOUT):
+    """One WAQI call, returning the `data` member of the response."""
+    r = requests.get(f"{WAQI_BASE}{path}", params=params,
+                     headers={"User-Agent": USER_AGENT}, timeout=timeout)
     r.raise_for_status()
     payload = r.json()
     # WAQI answers HTTP 200 with status "error" for a bad or unauthorised token.
     if payload.get("status") != "ok":
         raise PermissionError(
             f"WAQI rejected the request ({payload.get('data') or 'unknown error'})")
-    return payload.get("data") or []
+    return payload.get("data")
+
+
+def _waqi_rows(token):
+    """Every station WAQI holds inside the Mumbai bbox, in one request."""
+    lat1, lon1, lat2, lon2 = WAQI_BBOX
+    return _waqi_get("/map/bounds/",
+                     {"token": token,
+                      "latlng": f"{lat1},{lon1},{lat2},{lon2}"}) or []
+
+
+def _waqi_feed(token, uid):
+    """One station's feed, which is where the per-pollutant sub-indices are."""
+    return _waqi_get(f"/feed/@{uid}/", {"token": token},
+                     timeout=WAQI_FEED_TIMEOUT) or {}
+
+
+def _station_feed(token):
+    """A uid -> feed reader that answers None when one station fails.
+
+    One station timing out should not take the whole fallback down. A total
+    outage still surfaces, because the map/bounds call ahead of this raises.
+    """
+    def read(uid):
+        try:
+            return _waqi_feed(token, uid)
+        except (requests.exceptions.RequestException, PermissionError,
+                ValueError):
+            return None
+    return read
 
 
 def _to_float(value):
@@ -229,29 +269,66 @@ def parse(records, stations):
     return pd.Series(values, dtype=float), observed, unmatched
 
 
-def parse_waqi(rows, stations):
-    """Map WAQI's map/bounds stations onto ours, converting AQI to ug/m3.
+def waqi_pm25(feed):
+    """The PM2.5 sub-index out of one station's feed, in ug/m3, or None.
 
-    map/bounds reports one AQI per station, the index of whichever pollutant
-    dominates there. In Mumbai that is PM2.5 in all but the cleanest hours, but
-    when it is not, the converted value is an upper bound on PM2.5 rather than
-    a reading of it. This is the fallback source, and the app labels it.
+    iaqi.pm25 is PM2.5 specifically. The `aqi` field on the same payload is
+    whichever pollutant dominates there, which is usually but not always PM2.5,
+    so it is not what this reads.
     """
-    values, stamps, unmatched = {}, [], 0
+    iaqi = (feed or {}).get("iaqi") or {}
+    channel = iaqi.get("pm25") or {}
+    return aqi_to_ugm3(channel.get("v"))
+
+
+def match_waqi_stations(rows, stations):
+    """[(our station id, WAQI uid)] for the bbox stations that are ours.
+
+    One entry per station of ours, so the per-station fan-out that follows
+    makes one request each and no more.
+    """
+    matched, unmatched, seen = [], 0, set()
     for rec in rows:
-        val = aqi_to_ugm3(rec.get("aqi"))
         lat = _to_float(rec.get("lat"))
         lon = _to_float(rec.get("lon"))
-        if val is None or lat is None or lon is None:
+        uid = rec.get("uid")
+        if lat is None or lon is None or uid is None:
             continue
 
         sid = nearest_station(lat, lon, stations)
         if sid is None:
             unmatched += 1
             continue
-        values.setdefault(sid, val)
+        # Two WAQI stations can land on one of ours; keep the first.
+        if sid not in seen:
+            seen.add(sid)
+            matched.append((sid, uid))
+    return matched, unmatched
 
-        stamp = (rec.get("station") or {}).get("time")
+
+def parse_waqi(rows, stations, feed, budget_s=WAQI_BUDGET_S):
+    """Readings for our stations from WAQI, converted out of the US EPA AQI.
+
+    `feed` is called with a WAQI uid and returns that station's feed payload,
+    or None if it could not be read; stations it cannot answer for are skipped
+    rather than failing the whole fallback. The fan-out stops once budget_s has
+    gone, serving whatever came back by then.
+    """
+    matched, unmatched = match_waqi_stations(rows, stations)
+
+    values, stamps = {}, []
+    started = time.monotonic()
+    for sid, uid in matched:
+        if time.monotonic() - started > budget_s:
+            break
+        payload = feed(uid)
+        val = waqi_pm25(payload)
+        if val is None:
+            # A station WAQI holds but with no PM2.5 channel this hour.
+            continue
+        values[sid] = val
+
+        stamp = ((payload or {}).get("time") or {}).get("iso")
         if stamp:
             stamps.append(stamp)
 
@@ -347,7 +424,8 @@ def _fetch_waqi(stations, token=None):
         return LiveResult(ok=False, n_total=len(stations), source=SOURCE_WAQI,
                           error=f"WAQI returned something unreadable ({e})")
 
-    readings, observed, unmatched = parse_waqi(rows, stations)
+    readings, observed, unmatched = parse_waqi(rows, stations,
+                                              _station_feed(token))
     return _finish(readings, observed, unmatched, stations, SOURCE_WAQI, "WAQI",
                    attribution=WAQI_ATTRIBUTION)
 

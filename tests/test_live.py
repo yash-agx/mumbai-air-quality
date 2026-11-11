@@ -80,10 +80,44 @@ def waqi_payload(rows, status="ok"):
     return FakeResponse({"status": status, "data": rows})
 
 
-def waqi_row(lat, lon, aqi, stamp=None, name="Some Station"):
+def waqi_row(lat, lon, uid=1234, dominant=999, name="Some Station"):
+    """A map/bounds row: coordinates and a uid.
+
+    `dominant` is the overall AQI on this endpoint, the index of whichever
+    pollutant leads. It is deliberately absurd in these tests: nothing should
+    read it now that the PM2.5 sub-index comes from the per-station feed.
+    """
+    return {"lat": lat, "lon": lon, "uid": uid, "aqi": str(dominant),
+            "station": {"name": name}}
+
+
+def waqi_feed(pm25=None, stamp=None, iaqi=None, dominant=999):
+    """A /feed/@uid payload, carrying per-pollutant sub-indices in iaqi."""
     stamp = stamp or pd.Timestamp.now(tz="Asia/Kolkata").isoformat()
-    return {"lat": lat, "lon": lon, "uid": 1234, "aqi": str(aqi),
-            "station": {"name": name, "time": stamp}}
+    channels = dict(iaqi or {})
+    if pm25 is not None:
+        channels["pm25"] = {"v": pm25}
+    return {"aqi": dominant, "idx": 1234, "iaqi": channels,
+            "time": {"iso": stamp}}
+
+
+def waqi_http(http, rows, feeds, status="ok"):
+    """Route map/bounds to `rows` and each /feed/@uid to feeds[uid]."""
+    http.handlers["/map/bounds"] = waqi_payload(rows, status=status)
+    http.handlers["/feed/@"] = lambda params, _f=feeds: FakeResponse(
+        {"status": "ok", "data": _f[_current_uid(http)]})
+    return http
+
+
+def _current_uid(http):
+    """The uid of the feed request being served, from the URL just recorded."""
+    url = http.calls[-1][0]
+    return int(url.rstrip("/").rsplit("@", 1)[1])
+
+
+def feed_reader(feeds):
+    """A parse_waqi `feed` argument backed by a dict of uid -> payload."""
+    return lambda uid: feeds.get(uid)
 
 
 # --------------------------------------------------------------------------
@@ -159,59 +193,152 @@ def test_breakpoint_table_is_contiguous_and_ordered(live_mod):
 # --------------------------------------------------------------------------
 
 def test_parse_waqi_matches_by_coordinates_and_converts(live_mod, stations):
-    rows = [waqi_row(19.001, 72.821, 151), waqi_row(19.101, 72.881, 75)]
-    readings, observed, unmatched = live_mod.parse_waqi(rows, stations)
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22)]
+    feeds = {11: waqi_feed(pm25=151), 22: waqi_feed(pm25=75)}
+    readings, observed, unmatched = live_mod.parse_waqi(
+        rows, stations, feed_reader(feeds))
     assert dict(readings) == {1001: pytest.approx(55.5), 1002: pytest.approx(23.5)}
     assert unmatched == 0
     assert observed is not None
 
 
-def test_parse_waqi_ignores_stations_beyond_match_km(live_mod, stations):
-    """Same rule as the primary feed: MATCH_KM or it is not one of ours."""
-    far = waqi_row(19.60, 73.60, 120)
-    readings, _, unmatched = live_mod.parse_waqi([far], stations)
-    assert readings.empty
-    assert unmatched == 1
+def test_parse_waqi_reads_the_pm25_subindex_not_the_dominant_aqi(live_mod,
+                                                                 stations):
+    """The whole point of the per-station call: iaqi.pm25, not the lead index."""
+    rows = [waqi_row(19.001, 72.821, uid=11, dominant=300)]
+    feeds = {11: waqi_feed(pm25=151, dominant=300,
+                           iaqi={"pm10": {"v": 300}, "o3": {"v": 44}})}
+    readings, _, _ = live_mod.parse_waqi(rows, stations, feed_reader(feeds))
+    # 151 on the PM2.5 sub-index, not 300 from the dominant PM10.
+    assert dict(readings) == {1001: pytest.approx(55.5)}
 
 
-def test_parse_waqi_drops_rows_without_a_usable_reading(live_mod, stations):
-    rows = [waqi_row(19.001, 72.821, "-"), waqi_row(19.101, 72.881, 101)]
-    readings, _, unmatched = live_mod.parse_waqi(rows, stations)
+def test_parse_waqi_skips_a_station_with_no_pm25_channel(live_mod, stations):
+    """Some stations report only PM10 or ozone; they are not PM2.5 readings."""
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22)]
+    feeds = {11: waqi_feed(iaqi={"o3": {"v": 30}}), 22: waqi_feed(pm25=101)}
+    readings, _, unmatched = live_mod.parse_waqi(rows, stations,
+                                                 feed_reader(feeds))
     assert dict(readings) == {1002: pytest.approx(35.5)}
     assert unmatched == 0
 
 
-def test_parse_waqi_drops_rows_without_coordinates(live_mod, stations):
-    rows = [{"aqi": "80", "station": {"time": "2026-11-11T14:00:00+05:30"}}]
-    readings, _, _ = live_mod.parse_waqi(rows, stations)
+def test_parse_waqi_skips_a_station_whose_feed_fails(live_mod, stations):
+    """_station_feed answers None for one bad station rather than giving up."""
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22)]
+    feeds = {11: None, 22: waqi_feed(pm25=101)}
+    readings, _, _ = live_mod.parse_waqi(rows, stations, feed_reader(feeds))
+    assert dict(readings) == {1002: pytest.approx(35.5)}
+
+
+def test_parse_waqi_requests_each_matched_station_once(live_mod, stations):
+    """One feed call per station of ours, however many WAQI holds nearby."""
+    rows = [waqi_row(19.000, 72.820, uid=11), waqi_row(19.002, 72.822, uid=12),
+            waqi_row(19.101, 72.881, uid=22), waqi_row(19.60, 73.60, uid=99)]
+    asked = []
+
+    def feed(uid):
+        asked.append(uid)
+        return waqi_feed(pm25=101)
+
+    readings, _, unmatched = live_mod.parse_waqi(rows, stations, feed)
+    assert asked == [11, 22]
+    assert set(readings.index) == {1001, 1002}
+    assert unmatched == 1
+
+
+def test_parse_waqi_stops_at_the_time_budget(live_mod, stations, monkeypatch):
+    """A slow WAQI serves what arrived rather than holding the page open."""
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22),
+            waqi_row(19.201, 72.901, uid=33)]
+    clock = iter([0.0, 0.0, 10.0, 99.0])
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: next(clock))
+
+    readings, _, _ = live_mod.parse_waqi(rows, stations,
+                                         lambda uid: waqi_feed(pm25=101),
+                                         budget_s=25)
+    assert len(readings) == 2
+    assert set(readings.index) == {1001, 1002}
+
+
+def test_parse_waqi_ignores_stations_beyond_match_km(live_mod, stations):
+    """Same rule as the primary feed: MATCH_KM or it is not one of ours."""
+    far = waqi_row(19.60, 73.60, uid=99)
+    readings, _, unmatched = live_mod.parse_waqi(
+        [far], stations, feed_reader({99: waqi_feed(pm25=120)}))
     assert readings.empty
+    assert unmatched == 1
 
 
-def test_parse_waqi_keeps_the_first_of_two_rows_on_one_monitor(live_mod, stations):
-    rows = [waqi_row(19.000, 72.820, 101), waqi_row(19.002, 72.822, 300)]
-    readings, _, _ = live_mod.parse_waqi(rows, stations)
+def test_parse_waqi_drops_a_station_reporting_no_value(live_mod, stations):
+    """WAQI sends "-" for a channel with nothing current in it."""
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22)]
+    feeds = {11: waqi_feed(pm25="-"), 22: waqi_feed(pm25=101)}
+    readings, _, unmatched = live_mod.parse_waqi(rows, stations,
+                                                 feed_reader(feeds))
+    assert dict(readings) == {1002: pytest.approx(35.5)}
+    assert unmatched == 0
+
+
+def test_parse_waqi_drops_rows_without_coordinates_or_uid(live_mod, stations):
+    rows = [{"uid": 11}, {"lat": 19.001, "lon": 72.821}]
+    readings, _, unmatched = live_mod.parse_waqi(
+        rows, stations, feed_reader({11: waqi_feed(pm25=101)}))
+    assert readings.empty
+    assert unmatched == 0
+
+
+def test_parse_waqi_keeps_the_first_of_two_stations_on_one_monitor(live_mod,
+                                                                   stations):
+    rows = [waqi_row(19.000, 72.820, uid=11), waqi_row(19.002, 72.822, uid=12)]
+    feeds = {11: waqi_feed(pm25=101), 12: waqi_feed(pm25=300)}
+    readings, _, _ = live_mod.parse_waqi(rows, stations, feed_reader(feeds))
     assert dict(readings) == {1001: pytest.approx(35.5)}
 
 
 def test_parse_waqi_reads_the_newest_timestamp_in_utc(live_mod, stations):
-    rows = [waqi_row(19.001, 72.821, 101, stamp="2026-11-11T14:00:00+05:30"),
-            waqi_row(19.101, 72.881, 101, stamp="2026-11-11T15:00:00+05:30")]
-    _, observed, _ = live_mod.parse_waqi(rows, stations)
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22)]
+    feeds = {11: waqi_feed(pm25=101, stamp="2026-11-11T14:00:00+05:30"),
+             22: waqi_feed(pm25=101, stamp="2026-11-11T15:00:00+05:30")}
+    _, observed, _ = live_mod.parse_waqi(rows, stations, feed_reader(feeds))
     assert observed == pd.Timestamp("2026-11-11T09:30:00Z")
 
 
 def test_parse_waqi_survives_an_unparseable_timestamp(live_mod, stations):
-    rows = [waqi_row(19.001, 72.821, 101, stamp="whenever")]
-    readings, observed, _ = live_mod.parse_waqi(rows, stations)
+    rows = [waqi_row(19.001, 72.821, uid=11)]
+    feeds = {11: waqi_feed(pm25=101, stamp="whenever")}
+    readings, observed, _ = live_mod.parse_waqi(rows, stations,
+                                                feed_reader(feeds))
     assert dict(readings) == {1001: pytest.approx(35.5)}
     assert observed is None
 
 
 def test_parse_waqi_on_an_empty_response(live_mod, stations):
-    readings, observed, unmatched = live_mod.parse_waqi([], stations)
+    readings, observed, unmatched = live_mod.parse_waqi([], stations,
+                                                        feed_reader({}))
     assert readings.empty
     assert observed is None
     assert unmatched == 0
+
+
+def test_waqi_pm25_reads_the_channel(live_mod):
+    assert live_mod.waqi_pm25(waqi_feed(pm25=151)) == pytest.approx(55.5)
+    assert live_mod.waqi_pm25(waqi_feed(pm25="151")) == pytest.approx(55.5)
+
+
+@pytest.mark.parametrize("payload", [
+    None, {}, {"iaqi": {}}, {"iaqi": {"pm10": {"v": 80}}},
+    {"iaqi": {"pm25": {}}}, {"iaqi": {"pm25": {"v": "-"}}},
+])
+def test_waqi_pm25_without_a_usable_channel(live_mod, payload):
+    assert live_mod.waqi_pm25(payload) is None
+
+
+def test_match_waqi_stations_pairs_ids_with_uids(live_mod, stations):
+    rows = [waqi_row(19.001, 72.821, uid=11), waqi_row(19.60, 73.60, uid=99)]
+    matched, unmatched = live_mod.match_waqi_stations(rows, stations)
+    assert matched == [(1001, 11)]
+    assert unmatched == 1
 
 
 # --------------------------------------------------------------------------
@@ -242,7 +369,8 @@ def test_waqi_takes_over_whenever_the_primary_fails(live_mod, stations, http,
                                                     failure, handler):
     """Streamlit Cloud sees the first of these: data.gov.in refuses its IP."""
     http.handlers["data.gov.in"] = handler
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.001, 72.821, 151)])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151)})
 
     res = live_mod.fetch_live(stations, key="k", token="t")
     assert res.ok, f"{failure}: {res.error}"
@@ -258,7 +386,8 @@ def test_waqi_takes_over_when_the_primary_is_stale(live_mod, stations, http):
     http.handlers["data.gov.in"] = datagov_payload([
         datagov_record(19.001, 72.821, 41.0,
                        stamp=old.strftime("%d-%m-%Y %H:%M:%S"))])
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.101, 72.881, 101)])
+    waqi_http(http, [waqi_row(19.101, 72.881, uid=22)],
+              {22: waqi_feed(pm25=101)})
 
     res = live_mod.fetch_live(stations, key="k", token="t")
     assert res.ok
@@ -269,7 +398,8 @@ def test_waqi_takes_over_when_the_primary_is_stale(live_mod, stations, http):
 def test_waqi_is_used_when_no_primary_key_is_configured(live_mod, stations, http,
                                                         monkeypatch):
     monkeypatch.setattr(live_mod, "api_key", lambda: None)
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.001, 72.821, 151)])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151)})
 
     res = live_mod.fetch_live(stations, token="t")
     assert res.ok
@@ -280,7 +410,8 @@ def test_waqi_is_used_when_no_primary_key_is_configured(live_mod, stations, http
 def test_waqi_result_carries_the_attribution(live_mod, stations, http):
     """WAQI's terms require it wherever the data is shown."""
     http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.001, 72.821, 151)])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151)})
 
     res = live_mod.fetch_live(stations, key="k", token="t")
     assert res.attribution == live_mod.WAQI_ATTRIBUTION
@@ -291,7 +422,8 @@ def test_waqi_result_carries_the_attribution(live_mod, stations, http):
 def test_waqi_request_uses_the_map_bounds_endpoint_and_bbox(live_mod, stations,
                                                             http):
     http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.001, 72.821, 151)])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151)})
 
     live_mod.fetch_live(stations, key="k", token="tok")
     url, params = next((u, p) for u, p in http.calls if "waqi" in u)
@@ -301,11 +433,45 @@ def test_waqi_request_uses_the_map_bounds_endpoint_and_bbox(live_mod, stations,
     assert params["latlng"] == f"{lat1},{lon1},{lat2},{lon2}"
 
 
+def test_waqi_then_asks_each_station_for_its_own_feed(live_mod, stations, http):
+    http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11),
+                     waqi_row(19.101, 72.881, uid=22)],
+              {11: waqi_feed(pm25=151), 22: waqi_feed(pm25=101)})
+
+    res = live_mod.fetch_live(stations, key="k", token="tok")
+    feeds = [(u, p) for u, p in http.calls if "/feed/@" in u]
+    assert [u for u, _ in feeds] == [f"{live_mod.WAQI_BASE}/feed/@11/",
+                                     f"{live_mod.WAQI_BASE}/feed/@22/"]
+    assert all(p["token"] == "tok" for _, p in feeds)
+    assert dict(res.readings) == {1001: pytest.approx(55.5),
+                                  1002: pytest.approx(35.5)}
+
+
+def test_one_failing_station_feed_does_not_sink_the_fallback(live_mod, stations,
+                                                            http):
+    http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
+    http.handlers["/map/bounds"] = waqi_payload(
+        [waqi_row(19.001, 72.821, uid=11), waqi_row(19.101, 72.881, uid=22)])
+
+    def feed(params):
+        if "@11" in http.calls[-1][0]:
+            raise requests.exceptions.ReadTimeout("that one station is slow")
+        return FakeResponse({"status": "ok", "data": waqi_feed(pm25=101)})
+
+    http.handlers["/feed/@"] = feed
+
+    res = live_mod.fetch_live(stations, key="k", token="t")
+    assert res.ok
+    assert dict(res.readings) == {1002: pytest.approx(35.5)}
+    assert res.n_reporting == 1
+
+
 def test_waqi_stale_reading_is_not_served(live_mod, stations, http):
     """Same STALE_HOURS rule as the primary source."""
     http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
-    http.handlers["waqi"] = waqi_payload([
-        waqi_row(19.001, 72.821, 151, stamp="2020-01-01T10:00:00+05:30")])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151, stamp="2020-01-01T10:00:00+05:30")})
 
     res = live_mod.fetch_live(stations, key="k", token="t")
     assert not res.ok
@@ -314,8 +480,9 @@ def test_waqi_stale_reading_is_not_served(live_mod, stations, http):
 
 def test_waqi_counts_unmatched_stations(live_mod, stations, http):
     http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.001, 72.821, 151),
-                                          waqi_row(19.60, 73.60, 90)])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11),
+                     waqi_row(19.60, 73.60, uid=99)],
+              {11: waqi_feed(pm25=151)})
 
     res = live_mod.fetch_live(stations, key="k", token="t")
     assert res.ok
@@ -366,7 +533,7 @@ def test_no_credentials_at_all(live_mod, stations, monkeypatch):
 def test_rejected_waqi_token_is_reported(live_mod, stations, http):
     """WAQI answers HTTP 200 with status "error" for a bad token."""
     http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
-    http.handlers["waqi"] = waqi_payload("Invalid key", status="error")
+    http.handlers["/map/bounds"] = waqi_payload("Invalid key", status="error")
 
     res = live_mod.fetch_live(stations, key="k", token="bad")
     assert not res.ok
@@ -375,7 +542,7 @@ def test_rejected_waqi_token_is_reported(live_mod, stations, http):
 
 def test_waqi_with_nothing_matching_our_monitors(live_mod, stations, http):
     http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
-    http.handlers["waqi"] = waqi_payload([waqi_row(19.60, 73.60, 90)])
+    waqi_http(http, [waqi_row(19.60, 73.60, uid=99)], {})
 
     res = live_mod.fetch_live(stations, key="k", token="t")
     assert not res.ok

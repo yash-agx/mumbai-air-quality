@@ -567,7 +567,7 @@ pts["line4"] = "Government monitoring station"
 if live_ok:
     age_min = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60
     st.success(
-        f"**Live** - {snap["n_reporting"]} of {snap["n_total"]} monitors reporting, "
+        f"**Live** - {snap['n_reporting']} of {snap['n_total']} monitors reporting, "
         f"updated {ts.tz_convert(TZ):%H:%M} "
         f"({'just now' if age_min < 5 else f'{age_min:.0f} min ago'}). "
         f"Source: {snap['source']}.")
@@ -583,7 +583,7 @@ else:
         f"**Live readings unavailable.** {fallback_reason}. Showing the most "
         f"recent readings we hold instead, from "
         f"{ts.tz_convert(TZ):%d %b %Y, %H:%M}."
-        + (f"\n\n{snap["hint"]}" if snap and snap.get("hint") else ""))
+        + (f"\n\n{snap['hint']}" if snap and snap.get("hint") else ""))
 
 # ---------------------------------------------------------------- explainer
 _when = ("right now" if live_ok
