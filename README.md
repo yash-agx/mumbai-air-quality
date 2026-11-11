@@ -21,6 +21,7 @@ So most of the city has no monitor, and the places without one are not a random 
 |---|---|---|
 | History | [OpenAQ](https://openaq.org) v3 (republishing CPCB/MPCB/IITM) | 39 stations, 376,131 hourly readings, 2025-02-27 to 2026-08-27 (545 days) |
 | Live | [data.gov.in](https://data.gov.in) CPCB real-time feed | current hour, matched to the same 39 stations by coordinates |
+| Live fallback | [WAQI](https://waqi.info) map/bounds | the same CPCB stations as US AQI, converted back to µg/m³, used when data.gov.in is unreachable |
 | Land use | [OpenStreetMap](https://www.openstreetmap.org) via Overpass | roads, coastline, industrial land use, building footprints |
 
 Cleaning (`data/clean.py`) handles what actually breaks in this data rather than what is tidy to handle: missing hours, monitors offline for days, stuck sensors repeating one value for 24+ unbroken hours, near-coincident stations reported under different names by different agencies, and a residue of sensor artefacts that clear the physical plausibility check. That last one mattered: a saturation value of exactly 985.0 µg/m³ appeared as the maximum at five unrelated monitors, and isolated single-hour spikes appeared while the rest of the city sat at its usual ~23 µg/m³. Screening those two patterns changed RMSE from ~46 µg/m³ to ~21.
@@ -155,9 +156,14 @@ For the **live view**, add a [data.gov.in](https://data.gov.in) API key to a `.e
 
 ```
 DATAGOV_API_KEY=your-key-here
+WAQI_TOKEN=your-token-here
 ```
 
-The key must be authorised for dataset access, not just registered: an unauthorised key returns `403 Key not authorised` and the app falls back with that message.
+The data.gov.in key must be authorised for dataset access, not just registered: an unauthorised key returns `403 Key not authorised` and the app falls back with that message.
+
+`WAQI_TOKEN` is the fallback live source and is optional locally. data.gov.in blocks requests from Streamlit Cloud's servers, so the deployed app cannot reach it even with a valid key, while it works from India. WAQI republishes the same CPCB stations, so the app tries it second and says which source the readings came from. WAQI reports the US EPA AQI rather than a concentration, so each value is converted back to µg/m³ with the pre-2024 EPA PM2.5 breakpoints. That conversion is approximate, because the AQI arrives as an integer: a converted value sits in a 1-2 µg/m³ bin at the clean end and a wider one higher up. A free token comes from [aqicn.org](https://aqicn.org/data-platform/token/). On Streamlit Cloud both go under Settings > Secrets.
+
+Air quality data from the [World Air Quality Index project](https://waqi.info/), CC BY-SA 4.0.
 
 ### Rebuilding the data pipeline
 
@@ -180,7 +186,7 @@ The masks step is what keeps deployment small: it reduces 41 MB of OSM point clo
 app.py                     Streamlit dashboard
 data/fetch.py              OpenAQ historical pull
 data/clean.py              cleaning, artefact screen, quality report
-data/live.py               data.gov.in live CPCB feed
+data/live.py               live CPCB feed: data.gov.in, WAQI fallback
 scripts/01_check_api.py    API reconnaissance
 scripts/02_features.py     OSM land-use features for any lat/lon
 model/interpolate.py       IDW / kriging / trees, spatial CV, predict_surface

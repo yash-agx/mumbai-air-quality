@@ -47,6 +47,11 @@ def interp_mod():
     return _load("aq_interpolate", "model/interpolate.py")
 
 
+@pytest.fixture(scope="session")
+def live_mod():
+    return _load("aq_live", "data/live.py")
+
+
 # --------------------------------------------------------------------------
 # Raw-panel builder, shaped like what data/fetch.py writes.
 # --------------------------------------------------------------------------

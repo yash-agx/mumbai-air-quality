@@ -207,16 +207,16 @@ def model_card():
     return json.loads(engine().CARD_PATH.read_text(encoding="utf-8"))
 
 
-def datagov_key():
-    """The live-feed credential: Streamlit secrets first, then .env.
+def cloud_secret(name):
+    """A live-feed credential: Streamlit secrets first, then .env.
 
     st.secrets raises rather than returning empty when no secrets file exists,
-    which is the normal case locally, so the lookup is guarded and simply falls
-    through to the environment. Only this one key is needed in the cloud --
-    OPENAQ_API_KEY belongs to the offline pipeline, not the app.
+    which is the normal case locally, so the lookup is guarded and data/live.py
+    falls through to the environment. Only the two live-feed credentials are
+    needed in the cloud; OPENAQ_API_KEY belongs to the offline pipeline.
     """
     try:
-        value = st.secrets.get("DATAGOV_API_KEY")
+        value = st.secrets.get(name)
     except Exception:
         value = None
     return str(value) if value else None
@@ -224,14 +224,20 @@ def datagov_key():
 
 @st.cache_data(ttl=LIVE_TTL, show_spinner="Fetching current readings...")
 def live_snapshot():
-    """Current CPCB readings, refetched at most every LIVE_TTL seconds."""
+    """Current CPCB readings, refetched at most every LIVE_TTL seconds.
+
+    data/live.py tries data.gov.in first and WAQI second, so both credentials
+    are handed over and the result says which source answered.
+    """
     spec = importlib.util.spec_from_file_location("live", ROOT / "data" / "live.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     _, st_df = panel()
     # A plain dict, not the dataclass: st.cache_data pickles what it stores, and
     # a class defined in a module loaded by path is not importable by name.
-    return dataclasses.asdict(mod.fetch_live(st_df, key=datagov_key()))
+    return dataclasses.asdict(mod.fetch_live(
+        st_df, key=cloud_secret("DATAGOV_API_KEY"),
+        token=cloud_secret("WAQI_TOKEN")))
 
 
 def _unpack(s):
@@ -564,7 +570,10 @@ if live_ok:
         f"**Live** - {snap["n_reporting"]} of {snap["n_total"]} monitors reporting, "
         f"updated {ts.tz_convert(TZ):%H:%M} "
         f"({'just now' if age_min < 5 else f'{age_min:.0f} min ago'}). "
-        f"Source: {snap["source"]}.")
+        f"Source: {snap['source']}.")
+    # WAQI's terms require the attribution to appear wherever its data is shown.
+    if snap.get("attribution"):
+        st.caption(snap["attribution"])
 elif history:
     st.info(f"**Browsing history** - showing "
             f"{ts.tz_convert(TZ):%d %b %Y, %H:%M}. Turn off *Browse history* in "
@@ -1002,7 +1011,7 @@ with st.expander("Technical details"):
     st.markdown(f"""
 | | |
 |---|---|
-| Source | {"data.gov.in (CPCB), live" if live_ok else ("cached history (browsing)" if history else "cached history (live feed unavailable)")} |
+| Source | {(snap['source'] + ', live') if live_ok else ('cached history (browsing)' if history else 'cached history (live feed unavailable)')} |
 | Timestamp drawn | {ts.tz_convert(TZ):%Y-%m-%d %H:%M} IST ({ts:%H:%M} UTC) |
 | Monitors reporting | {meta['n_stations']} of {len(stations)} |
 | Live fetch | {"ok" if live_ok else (fallback_reason or "not attempted (browsing history)")} |
@@ -1024,4 +1033,15 @@ daily number does.
 scales with the concentration, not with distance from a monitor - error against
 distance-to-nearest-monitor measured r = -0.02. Being far from a monitor is not,
 by itself, a reason to distrust a square.
+""")
+    # Only when the fallback is what answered: the attribution field is set
+    # for WAQI alone, and readers should know the readings were converted.
+    if live_ok and snap.get("attribution"):
+        st.markdown(f"""
+**On the live source.** data.gov.in could not be reached, so these readings
+come from {snap['source']}. WAQI publishes the US EPA AQI rather than a
+concentration, so each value was converted back to ug/m3 with the pre-2024 EPA
+PM2.5 breakpoints. That conversion is approximate: the AQI arrives as an
+integer, so a value lands in a 1-2 ug/m3 bin at the clean end and a wider one
+higher up. {snap['attribution']}.
 """)
