@@ -1,25 +1,25 @@
 """Do diurnal patterns relate to land use?
 
-Tests whether the per-monitor hour-of-day profile -- its shape and its swing --
+Tests whether the per-monitor hour-of-day profile (its shape and its swing)
 is associated with the OSM land-use features already computed per station.
 
-Profiles are built on the COMMON WINDOW -- the span over which every monitor
-reports -- not the full 18-month record. Three monitors came online in March
+Profiles are built on the COMMON WINDOW, the span over which every monitor
+reports, not the full 18-month record. Three monitors came online in March
 2026, so on the full record their hour-of-day profiles average a different,
 monsoon-weighted slice of the year from everyone else's, which is a seasonal
 difference wearing a spatial costume. The full record is kept as a sensitivity.
 
-Read the honest caveat with it: the window was promoted to primary AFTER the
+Read the caveat with it: the window was promoted to primary AFTER the
 full-record run showed two of the four primary estimates moving under it. The
 confound it removes is real and the argument for it does not depend on the
-result, but the decision to prefer it did. See NOTES.md.
+result, but the decision to prefer it did.
 
 Structure, fixed before any result was seen:
 
   1. CONTROL. A Mantel test on whether diurnal shape similarity decays with
      distance. If it does, the features (which are themselves spatially
      autocorrelated) get a free ride on geography and every p-value below is
-     anticonservative. Near-coincident pairs (same cv_group) are excluded --
+     anticonservative. Near-coincident pairs (same cv_group) are excluded:
      they are the one bin the variogram work already flagged as unexploitable.
 
      It decays in this window (-0.215) and is flat on the full record (+0.053).
@@ -28,7 +28,7 @@ Structure, fixed before any result was seen:
      -0.046 (p = 0.59) on the same monitors at the same length, every seasonal
      block in the record is flat, and no rolling 180-day window elsewhere in the
      18 months reaches half of it. Treat the four p-values below as possibly
-     anticonservative anyway -- that is the conservative reading, and all four
+     anticonservative anyway, which is the conservative reading, and all four
      tests are null, which a false-positive bias only makes harder to achieve.
 
   2. PRIMARY. Four pre-specified feature x summary pairs, Benjamini-Hochberg
@@ -61,15 +61,10 @@ N_PERM = 20000
 SEED = 0
 TZ = "Asia/Kolkata"
 
-# The primary window: the first local day on which every monitor in the panel
-# is reporting. Chinchpada (6266794) is the last to come online, on 2026-03-10;
-# Kalu Nagar and Vithalwadi arrive within the week before it. Profiles built
-# before this date average different date ranges at different stations.
-#
-# What it costs, and the cost is not small: the window runs March to August, so
-# it holds none of Mumbai's November-February pollution season and is weighted
-# towards the monsoon. The primary analysis therefore describes the clean half
-# of the year. Quantified in the run output.
+# The primary window: the first local day on which every monitor is reporting.
+# Chinchpada (6266794) is the last to come online, on 2026-03-10. It costs a
+# lot: the window runs March to August, so it holds none of Mumbai's
+# November-February season and is weighted towards the monsoon.
 COMMON_START = "2026-03-10"
 
 # Windows for the morning-evening balance, IST, inclusive.
@@ -92,10 +87,9 @@ PRIMARY = [
 
 
 # ---------------------------------------------------------------- reused
-# diurnal() and shape_of() are copied verbatim from app.py (lines 345 and 353)
-# so the summaries are built on exactly the computation the dashboard reports.
-# Kept as copies rather than a shared import because app.py is a Streamlit
-# script and importing it would execute the whole page.
+# diurnal() and shape_of() are copied from app.py so the summaries match the
+# dashboard. Copies rather than an import, because importing a Streamlit
+# script would execute the whole page.
 
 def diurnal(values, hours):
     """Mean by hour of day, as a 24-long array with gaps as NaN."""
@@ -142,11 +136,10 @@ def summarise_profile(profile, morning=None, evening=None):
     sh = shape_of(profile)
     a, b = harmonics(profile, n_harm=2)
 
-    # Peak/trough as the phase of the fitted 24h harmonic, in hours. A raw
-    # argmax over 24 integers is both discrete and circular-blind; the phase is
-    # continuous and rotation-correct. NOTE: with a first-harmonic phase the
-    # trough sits 12h from the peak by construction, so the two are one
-    # statistic and their circular-linear tests come out numerically identical.
+    # Peak/trough as the phase of the fitted 24h harmonic, in hours, which is
+    # continuous and rotation-correct unlike an argmax over 24 integers. With a
+    # first harmonic the trough sits 12h from the peak, so the two are one
+    # statistic and their tests come out identical.
     peak = (np.arctan2(b[0], a[0]) / (2 * np.pi) * 24) % 24
     trough = (peak + 12) % 24
 
@@ -197,7 +190,7 @@ def circ_diff(a, b):
 def circ_linear_r(x, hours):
     """Mardia's circular-linear correlation, on ranked x for robustness.
 
-    Returns R in [0, 1]. The statistic has no sign -- an association between a
+    Returns R in [0, 1]. The statistic has no sign: an association between a
     linear variable and a phase has no direction to report.
     """
     xr = stats.rankdata(x)
@@ -311,7 +304,7 @@ def to_groups(summ, feat):
     """Collapse stations to cv_group units.
 
     Near-coincident stations are not independent observations of a land-use
-    relationship -- bandra_east's two monitors are 70 m apart and share their
+    relationship: bandra_east's two monitors are 70 m apart and share their
     features to three significant figures. Counting them twice inflates n and
     understates every p-value. Circular summaries are averaged circularly.
     """
@@ -416,10 +409,9 @@ def main():
           f"p = {p:.4f}  over {npairs} pairs   [PRIMARY: common window]")
     print(f"  ({int(np.triu(same_group, 1).sum())} within-group pairs excluded)")
 
-    # The same test on the full record. It is reported because the two windows
-    # disagree outright -- flat on the full record, decaying on the common one,
-    # same monitors and same code. 04_mantel_window.py resolved which way that
-    # cuts: the window's decay is the local result and does not generalise.
+    # The same test on the full record, reported because the two windows
+    # disagree: flat on the full record, decaying on the common one.
+    # 04_mantel_window.py found the window's decay does not generalise.
     Sf = np.vstack([shape_of(prof_full.loc[s].to_numpy()) for s in sids])
     rf, pf, _ = mantel(np.corrcoef(Sf), dist, keep)
     print(f"  same test, full record            = {rf:+.4f}  "
@@ -428,7 +420,7 @@ def main():
           "calendar months")
     print("     a year earlier give -0.046 (p = 0.59), and every seasonal block "
           "in the record")
-    print("     is flat. See scripts/04_mantel_window.py and NOTES.md.")
+    print("     is flat. See scripts/04_mantel_window.py.")
 
     iu = np.triu_indices(len(sids), 1)
     dv, sv, kv = dist[iu], sim[iu], keep[iu]
@@ -447,9 +439,8 @@ def main():
               f"median r(shape) = {np.median(sim[wg]):.3f}, "
               f"median separation {np.median(dist[wg]):.2f} km")
 
-    # The other half of the confounding argument: a feature that is itself
-    # spatially structured can only borrow geography's significance if shape is
-    # spatially structured too. Reported so the claim rests on both sides.
+    # The other half of the confounding argument: a spatially structured
+    # feature can only borrow geography's significance if shape is too.
     print("\n  are the features themselves spatially structured? "
           "(Mantel, same excluded pairs)")
     for f in FEATURES:
@@ -553,12 +544,11 @@ def main():
     print("  columns: " + " | ".join(f"{f}x{s}" for f, s in PRIMARY))
     primary_p(units, "PRIMARY: common window, cv groups")
 
-    # The former primary. Two of the four estimates move under the window --
+    # The former primary. Two of the four estimates move under the window:
     # dist_industrial_m changes sign (-0.084 -> +0.091) and
     # building_density_500m x swing collapses (+0.233 -> +0.027, keeping 12% of
-    # its magnitude; a 2026-03-01 start keeps 38%) -- which
-    # is the seasonal confound showing itself, and the reason the window was
-    # promoted. Neither version is significant either way.
+    # its magnitude; a 2026-03-01 start keeps 38%). Neither version is
+    # significant either way.
     primary_p(units_full, "full record (was primary)", "   <- the swap")
 
     primary_p(summ.join(feat[FEATURES]), "station level (pseudo-replicated)")
@@ -567,9 +557,8 @@ def main():
     primary_p(to_groups(summ.loc[keep_cov], feat.loc[keep_cov]),
               "in-window coverage >= 50%")
 
-    # Where the window starts is itself an analytic choice, so vary it. The
-    # primary date is the only one that is not arbitrary -- it is the day the
-    # last monitor came online -- but the reader should see the neighbourhood.
+    # Where the window starts is itself a choice, so vary it. The primary date
+    # is the day the last monitor came online, but show the neighbourhood.
     for start in ("2026-01-01", "2026-03-01", "2026-04-01", "2026-05-01"):
         m = np.asarray(ist >= pd.Timestamp(start, tz=TZ))
         primary_p(to_groups(summary_table(profiles_for(wide, hours, m)), feat),
@@ -583,8 +572,7 @@ def main():
               f"artefact screen at 500 ({n_scr} dropped)")
 
     # Where the morning and evening windows are drawn is a choice too, so vary
-    # it. Only the two balance tests can move; the other two columns are shown
-    # unchanged as a check that nothing else is touched.
+    # it. Only the two balance tests can move.
     for m_w, e_w in ((range(5, 10), range(17, 22)), (range(7, 11), range(19, 23)),
                      (range(6, 10), range(19, 23)), (range(4, 12), range(16, 24)),
                      (range(7, 10), range(20, 23))):

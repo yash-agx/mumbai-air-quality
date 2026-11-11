@@ -6,15 +6,10 @@ data/interim/
 __pycache__/
 *.pyc
 
-# The deployed app reads a handful of small artefacts out of data/processed, so
-# those are committed and the rest of the directory is not. Ignoring the
-# directory itself would make the negations below unreachable, hence the /*.
+# Keep the small artefacts the app reads, ignore the rest.
 data/processed/*
 !data/processed/pm25_clean.parquet
 !data/processed/station_features.parquet
 !data/processed/model_card.json
 !data/processed/feature_bounds.json
 !data/processed/grid_masks.npz
-
-
-PROMPT.md

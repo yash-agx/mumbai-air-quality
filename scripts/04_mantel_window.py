@@ -1,7 +1,7 @@
 """Why does the Mantel control disagree between the two windows?
 
-`scripts/03_diurnal_landuse.py` runs a control test -- does diurnal shape
-similarity decay with distance? -- and gets two incompatible answers from the
+`scripts/03_diurnal_landuse.py` runs a control test (does diurnal shape
+similarity decay with distance?) and gets two incompatible answers from the
 same monitors and the same code:
 
     full record   (2025-02-28 to 2026-08-27)   r = +0.053, p = 0.518
@@ -28,7 +28,7 @@ Everything after that follows from the answer, which is no.
      the window, and profiles rebuilt at fixed seasonal weights instead of by
      pooling hours, so the imbalance cannot act at all.
   2. SEASONS. Mantel inside seasonal blocks, across the whole record, on the 36
-     span-matched monitors -- so the question "does the decay hold across
+     span-matched monitors, so the question "does the decay hold across
      seasons?" is asked of every season the record contains, not only the two
      inside the window.
   3. LENGTH. Controls separating a real seasonal difference from the attenuation
@@ -39,8 +39,7 @@ Everything after that follows from the answer, which is no.
   6. PHASE. How circular-phase reliability depends on record length, what it
      actually depends on instead, and what a usable trough-hour test would cost.
 
-Nothing here changes any test in 03_; it only reads the same panel. Findings go
-to a new section in NOTES.md.
+Nothing here changes any test in 03_; it only reads the same panel.
 
 Run: python scripts/04_mantel_window.py
 """
@@ -60,21 +59,18 @@ SEED = 0
 N_PERM = 20000        # for the headline numbers
 N_PERM_SWEEP = 2000   # for the many-window sweeps, where p is indicative only
 COMMON_START = "2026-03-10"
-# Monsoon onset, used only to cut the common window into its two seasons for the
-# fixed-weight reconstruction in section 1b. Mumbai's onset is early June; the
-# exact day is not critical, because the reconstruction is also run at monthly
-# resolution, which does not depend on this boundary at all.
+# Monsoon onset, used only to cut the common window into two seasons for the
+# reconstruction in section 1b. The exact day is not critical, because the
+# reconstruction is also run at monthly resolution.
 MONSOON_START = "2026-06-01"
 
 # The three monitors that came online in March 2026. Everything labelled
-# "span-matched" drops them, which is what makes a full-record run comparable
-# across seasons: the other 36 all start within six weeks of each other in
-# early 2025 and run to the end.
+# "span-matched" drops them; the other 36 all start within six weeks of each
+# other in early 2025 and run to the end.
 LATE = [6258871, 6266795, 6266794]
 
-# Below this the fitted 24h harmonic is small enough that its phase is set by
-# noise rather than by a daily cycle. Chosen by inspection of the amplitude
-# distribution and used only for diagnostics, never to filter a reported test.
+# Below this the fitted 24h harmonic is small enough that its phase is noise
+# rather than a daily cycle. Used only for diagnostics, never to filter a test.
 WEAK_AMP = 1.5
 
 np.seterr(all="ignore")
@@ -85,9 +81,9 @@ warnings.filterwarnings("ignore", message="Degrees of freedom <= 0")
 
 
 # ---------------------------------------------------------------- primitives
-# diurnal() and shape_of() match app.py and 03_diurnal_landuse.py. They are
-# reimplemented over an array rather than a Series here because every sweep
-# below rebuilds profiles thousands of times and the groupby is the bottleneck.
+# diurnal() and shape_of() match app.py and 03_diurnal_landuse.py, over arrays
+# rather than Series because the sweeps below rebuild profiles thousands of
+# times and the groupby is the bottleneck.
 
 def profiles(values, hours, mask=None):
     """Stations x 24 hour-of-day mean profiles. NaN where an hour is unseen."""
@@ -204,9 +200,8 @@ class Panel:
         self.ist = wide.index.tz_convert(TZ)
         self.hours = self.ist.hour.to_numpy()
         self.month = self.ist.month.to_numpy()
-        # Day index counted from the first day of the record, so odd/even splits
-        # and window arithmetic do not break across the year boundary the way
-        # dayofyear does.
+        # Day index from the first day of the record, so odd/even splits do
+        # not break across the year boundary the way dayofyear does.
         self.day = (self.ist.normalize() - self.ist.normalize().min()).days.to_numpy()
         self.values = wide.to_numpy(dtype=float)
 
@@ -236,7 +231,7 @@ class Panel:
         """Mantel r between shape similarity and distance over an hour mask.
 
         Stations without a complete 24-hour profile inside the mask are dropped
-        rather than imputed -- a partial profile is a different statistic, and
+        rather than imputed: a partial profile is a different statistic, and
         in the short blocks below a few stations always have a gap.
         """
         cols = np.arange(len(self.sids)) if subset is None else np.asarray(subset)
@@ -385,9 +380,8 @@ def section_coverage_weights(pan):
     w = share[:, None]
     P_obs = w * P_pre + (1 - w) * P_mon
 
-    # A monitor missing a whole season inside the window has no seasonal profile
-    # to average, so it cannot enter any reconstruction. Dropping it from the
-    # pooled arm too is what makes the four numbers comparable.
+    # A monitor missing a whole season inside the window has no seasonal
+    # profile to average, so it cannot enter any reconstruction.
     ok = (np.isfinite(P_pool).all(1) & np.isfinite(P_eq).all(1)
           & np.isfinite(P_month).all(1))
     print("\n  (c) profiles rebuilt at FIXED seasonal weights, pooling replaced\n")
@@ -624,9 +618,8 @@ def section_jackknife(pan):
           f"{loo.max():+.4f}")
     print(f"    largest single-pair influence: {np.abs(infl).max():.4f}")
 
-    # Greedy adversarial removal, plus a calibration so the number means
-    # something: an honest r of this size on this many pairs is also erased by
-    # deleting a modest fraction of them, chosen adversarially.
+    # Greedy adversarial removal, plus a calibration: an r of this size on
+    # this many pairs is also erased by deleting a modest fraction of them.
     cur_a, cur_b = a.copy(), b.copy()
     marks = {}
     for k in range(1, 121):

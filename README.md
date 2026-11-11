@@ -13,7 +13,7 @@ Interactive map of PM2.5 across the Mumbai metropolitan region, interpolating be
 
 The Mumbai metropolitan region has roughly 20 million people and 39 usable PM2.5 monitors. That is one monitor per half-million people, spaced 1–40 km apart, and they are not spread evenly: they cluster near main roads and industrial land, because that is where regulatory interest sits.
 
-So most of the city has no monitor, and the places without one are not a random sample of the places with one. Estimating what the gaps look like is the entire problem, and how well that can be done is the question this project actually answers — the answer turns out to be "less well than you would hope", for a reason that is measurable.
+So most of the city has no monitor, and the places without one are not a random sample of the places with one. Estimating what the gaps look like is the entire problem, and how well that can be done is the question this project actually answers: the answer is "less well than you would hope", for a reason that is measurable.
 
 ## Data
 
@@ -23,24 +23,24 @@ So most of the city has no monitor, and the places without one are not a random 
 | Live | [data.gov.in](https://data.gov.in) CPCB real-time feed | current hour, matched to the same 39 stations by coordinates |
 | Land use | [OpenStreetMap](https://www.openstreetmap.org) via Overpass | roads, coastline, industrial land use, building footprints |
 
-Cleaning (`data/clean.py`) handles what actually breaks in this data rather than what is tidy to handle: missing hours, monitors offline for days, stuck sensors repeating one value for 24+ unbroken hours, near-coincident stations reported under different names by different agencies, and a residue of sensor artefacts that clear the physical plausibility check. That last one mattered — a saturation value of exactly 985.0 µg/m³ appeared as the maximum at five unrelated monitors, and isolated single-hour spikes appeared while the rest of the city sat at its usual ~23 µg/m³. Screening those two patterns changed RMSE from ~46 µg/m³ to ~21.
+Cleaning (`data/clean.py`) handles what actually breaks in this data rather than what is tidy to handle: missing hours, monitors offline for days, stuck sensors repeating one value for 24+ unbroken hours, near-coincident stations reported under different names by different agencies, and a residue of sensor artefacts that clear the physical plausibility check. That last one mattered: a saturation value of exactly 985.0 µg/m³ appeared as the maximum at five unrelated monitors, and isolated single-hour spikes appeared while the rest of the city sat at its usual ~23 µg/m³. Screening those two patterns changed RMSE from ~46 µg/m³ to ~21.
 
 Six land-use features are computed per location from OSM (`scripts/02_features.py`), as a reusable function over any latitude/longitude so the same features serve both the 39 monitors and an arbitrary prediction grid: distance to the nearest major road, road density within 500 m and 1 km, distance to the coast, distance to the nearest industrial land use, and building density within 500 m.
 
 ## Method
 
-Three models, each given exactly the same information — the readings from every other monitor at the hour being predicted:
+Three models, each given exactly the same information, the readings from every other monitor at the hour being predicted:
 
-- **IDW** — inverse distance weighting. The baseline. Its power is tuned per fold on training monitors only, because the conventional 1/d² is not its best setting here and a deliberately weak baseline would flatter everything else.
-- **Kriging** — ordinary kriging on hourly-standardised values with one fitted exponential variogram.
-- **Gradient-boosted trees** — on the six OSM features plus hour, day of week, month and the hour's citywide level. (The plan called for a random forest; boosted trees give the same family of model at ~20× the fit speed, which is what made 35 folds tractable.) A fourth variant hands the trees the IDW estimate as an extra input, to test directly whether land use adds anything on top of distance weighting.
+- **IDW**: inverse distance weighting. The baseline. Its power is tuned per fold on training monitors only, because the conventional 1/d² is not its best setting here and a deliberately weak baseline would flatter everything else.
+- **Kriging**: ordinary kriging on hourly-standardised values with one fitted exponential variogram.
+- **Gradient-boosted trees**: on the six OSM features plus hour, day of week, month and the hour's citywide level. (I first planned a random forest; boosted trees give the same family of model at ~20× the fit speed, which is what made 35 folds tractable.) A fourth variant hands the trees the IDW estimate as an extra input, to test directly whether land use adds anything on top of distance weighting.
 
-**Validation is leave-one-group-out, not leave-one-station-out.** Several monitors sit within a kilometre of each other — two in Bandra East are ~70 m apart. Holding out one while its neighbour trains is not a spatial test: the model reads the answer off the neighbour across the street. Those are grouped, so the 39 monitors form 35 groups that are held out whole. The same rule applies to the inner loop that tunes the IDW power; without it, a 70 m partner leaks into the tuning.
+**Validation is leave-one-group-out, not leave-one-station-out.** Several monitors sit within a kilometre of each other. Two in Bandra East are ~70 m apart. Holding out one while its neighbour trains is not a spatial test: the model reads the answer off the neighbour across the street. Those are grouped, so the 39 monitors form 35 groups that are held out whole. The same rule applies to the inner loop that tunes the IDW power; without it, a 70 m partner leaks into the tuning.
 
 **Where the map refuses to answer.** Each grid cell's six land-use features are compared against the range spanned by all 39 monitors; a cell outside that range on any feature gets no estimate, because nothing in the cross-validation score says what the model does in terrain it never saw. Two deliberate choices in that rule:
 
-- The band is **min–max, not a percentile trim**. With 39 monitors, p01 sits just above the minimum, and 9 monitors fell outside their own band — the mask would have shaded ground where measurements exist.
-- **A cell containing a monitor is always in-range**, whatever its features say. The mask flags places with no comparable training data, and a cell with a monitor in it has ground truth by definition. This is not hypothetical: the mask is evaluated at the cell centre, which at 2.3 km cells can sit most of a kilometre from the monitor, and 11 of 39 monitors landed in masked cells — Bandra Kurla Complex was excluded for a road density of 28.99 against a training maximum of 28.98, a margin of 0.035%. A percentage tolerance would have papered over it with an arbitrary number; the monitor rule follows from what the mask is for. It moves coverage from 81.3% masked to 79.8%, and leaves 0 of 39 monitors in a refused cell.
+- The band is **min–max, not a percentile trim**. With 39 monitors, p01 sits just above the minimum, and 9 monitors fell outside their own band. The mask would have shaded ground where measurements exist.
+- **A cell containing a monitor is always in-range**, whatever its features say. The mask flags places with no comparable training data, and a cell with a monitor in it has ground truth by definition. This is not hypothetical: the mask is evaluated at the cell centre, which at 2.3 km cells can sit most of a kilometre from the monitor, and 11 of 39 monitors landed in masked cells: Bandra Kurla Complex was excluded for a road density of 28.99 against a training maximum of 28.98, a margin of 0.035%. A percentage tolerance would have papered over it with an arbitrary number; the monitor rule follows from what the mask is for. It moves coverage from 81.3% masked to 79.8%, and leaves 0 of 39 monitors in a refused cell.
 
 ## Results
 
@@ -48,7 +48,7 @@ Pooled over 376,112 held-out station-hours across 35 folds:
 
 | model | MAE (µg/m³) | RMSE (µg/m³) | vs IDW |
 |---|---:|---:|---:|
-| **IDW** | **11.229** | **21.117** | — |
+| **IDW** | **11.229** | **21.117** | |
 | Kriging | 11.293 | 21.168 | +0.24% |
 | City average | 11.359 | 21.223 | +0.50% |
 | Trees + IDW | 11.286 | 21.550 | +2.05% |
@@ -78,11 +78,11 @@ Take each hour's readings, subtract that hour's citywide mean and divide by its 
 
 Semivariance ~1.0 means two monitors are no more alike than two picked at random. The curve is flat beyond ~2 km. Even at the closest separation only about a tenth of the variance is spatially structured. The same shape appears in the raw, artefact-screened and log-transformed data, so it is a property of the field and not of outliers.
 
-The closest monitor pairs outside the co-located groups are ~1 km apart and most are 5–40 km. **The correlation is gone before the second-nearest monitor.** There is very little for any interpolation method to exploit, which caps how far any model can get beyond "the city is at X right now" — and kriging in particular cannot beat IDW, because the variogram it fits is nearly pure nugget.
+The closest monitor pairs outside the co-located groups are ~1 km apart and most are 5–40 km. **The correlation is gone before the second-nearest monitor.** There is very little for any interpolation method to exploit, which caps how far any model can get beyond "the city is at X right now", and kriging in particular cannot beat IDW, because the variogram it fits is nearly pure nugget.
 
-Two honest caveats on that table. The nearest bin rests on 10 pairs, and those are exactly the near-coincident monitors that cross-validation holds out together — so the one bin showing structure is the one deliberately not exploited. And the fitted variogram is correspondingly unstable across folds: median nugget 0.95, range poorly identified anywhere from 2 km to the 300 km bound. That instability is itself the result; there is no well-defined range to find because there is almost nothing to fit.
+Two caveats on that table. The nearest bin rests on 10 pairs, and those are exactly the near-coincident monitors that cross-validation holds out together, so the one bin showing structure is the one deliberately not exploited. And the fitted variogram is correspondingly unstable across folds: median nugget 0.95, range poorly identified anywhere from 2 km to the 300 km bound. That instability is itself the result; there is no well-defined range to find because there is almost nothing to fit.
 
-The map is therefore honestly described as *the city average, tilted slightly* — not a resolved street-level pollution field. The app says so in its own model card panel, and the grid is drawn at ~2.3 km cells rather than a smooth high-resolution raster that would imply more certainty than the data supports.
+The map is therefore described as *the city average, tilted slightly*, not a resolved street-level pollution field. The app says so in its own model card panel, and the grid is drawn at ~2.3 km cells rather than a smooth high-resolution raster that would imply more certainty than the data supports.
 
 ### Diurnal timing: location-specific, and thrown away
 
@@ -93,7 +93,7 @@ Ask about *when* each place peaks rather than *how high*, and the answer inverts
 | Same monitor, independent halves of the record | **0.889** | 0.799–0.956 |
 | Two different monitors | **0.504** | 0.259–0.683 |
 
-The first row is a **noise ceiling**, and it is what makes the second row mean anything. A between-monitor correlation of 0.50 proves nothing by itself — profiles built from finite, gappy records are noisy, and removing each site's level and swing amplifies that noise, so 0.50 could be measurement error. Splitting each monitor's own record into odd and even days gives two independent estimates of the *same* profile, where the true shape is identical by construction. Correlating those measures how well a profile can be reproduced at all: r = 0.889. Different monitors reach only 57% of that ceiling (gap +0.385, Mann–Whitney p = 5.6×10⁻²⁰), so locations really do have distinct daily rhythms. A single common shape explains just 32.9% of the variance across the 39 sites, on a median day–night swing of 10.4 µg/m³.
+The first row is a **noise ceiling**, and it is what makes the second row mean anything. A between-monitor correlation of 0.50 proves nothing by itself: profiles built from finite, gappy records are noisy, and removing each site's level and swing amplifies that noise, so 0.50 could be measurement error. Splitting each monitor's own record into odd and even days gives two independent estimates of the *same* profile, where the true shape is identical by construction. Correlating those measures how well a profile can be reproduced at all: r = 0.889. Different monitors reach only 57% of that ceiling (gap +0.385, Mann–Whitney p = 5.6×10⁻²⁰), so locations really do have distinct daily rhythms. A single common shape explains just 32.9% of the variance across the 39 sites, on a median day–night swing of 10.4 µg/m³.
 
 **IDW cannot represent that.** An interpolated series is a fixed-weight average over all reporting monitors, so its diurnal shape is the citywide shape wherever it is computed. Measured at each monitor's own location, against the all-monitor average curve:
 
@@ -102,11 +102,11 @@ The first row is a **noise ceiling**, and it is what makes the second row mean a
 | Measured monitor | **0.758** |
 | IDW estimate for the same spot | **0.997** |
 
-The estimate reproduces the city's daily rhythm almost exactly and the local one not at all — the same mechanism as the flat variogram, but visible as a shape being flattened rather than a number being close.
+The estimate reproduces the city's daily rhythm almost exactly and the local one not at all: the same mechanism as the flat variogram, but visible as a shape being flattened rather than a number being close.
 
-**Both halves together are the result.** At this network's spacing the hourly level is not spatially predictable, while diurnal timing is location-specific and reliably measurable — and the interpolation discards the second along with the first. Local timing requires measurement at that location; interpolating between monitors 1–40 km apart will not recover it. The app's time-patterns section plots the measured and estimated curves as separate series so the gap is visible rather than asserted.
+**Both halves together are the result.** At this network's spacing the hourly level is not spatially predictable, while diurnal timing is location-specific and reliably measurable, and the interpolation discards the second along with the first. Local timing requires measurement at that location; interpolating between monitors 1–40 km apart will not recover it. The app's time-patterns section plots the measured and estimated curves as separate series so the gap is visible rather than asserted.
 
-### Land use does not explain the timing — at least not detectably
+### Land use does not explain the timing, at least not detectably
 
 If each site has its own daily rhythm, the obvious next question is whether the land around it sets that rhythm. Four tests were fixed in advance, each pairing one OSM feature with one summary of profile shape, with Benjamini–Hochberg correction across the four. They are computed on the window over which all 39 monitors report, with the full record kept as a sensitivity check:
 
@@ -119,23 +119,23 @@ If each site has its own daily rhythm, the obvious next question is whether the 
 
 **None is significant, adjusted or not.** The unit of analysis is the cross-validation group rather than the station, so n = 35 rather than 39: near-coincident monitors are not independent observations of a land-use relationship, and counting them twice would understate every p-value.
 
-**This is a limit on what 35 monitors can detect, not a demonstration that land use is irrelevant.** A permutation test at n = 35 reaches 80% power only around |ρ| = 0.48, and a true correlation of 0.30 would be missed about two times in three. Every effect measured here falls well inside that blind spot. The honest statement is that land-use features at 500 m–1 km explain no part of diurnal shape *large enough for this network to see* — not that there is nothing to explain.
+**This is a limit on what 35 monitors can detect, not a demonstration that land use is irrelevant.** A permutation test at n = 35 reaches 80% power only around |ρ| = 0.48, and a true correlation of 0.30 would be missed about two times in three. Every effect measured here falls well inside that blind spot. The statement is that land-use features at 500 m–1 km explain no part of diurnal shape *large enough for this network to see*, not that there is nothing to explain.
 
-**One control needed chasing, and it matters.** The tests assume diurnal shape is not itself spatially autocorrelated; if it were, a feature that is spatially structured could inherit geography's significance. A Mantel test on whether shape similarity decays with separation gives **opposite answers on the two time windows**. On the full 18-month record it is flat (r = +0.053, p = 0.518); on the common window it decays clearly (r = −0.215, p = 0.0009). Same monitors, same statistic, same code. The decay turns out to be confined to that one span — the same calendar months a year earlier give r = −0.046 (p = 0.59) on the same monitors at the same length, and every seasonal block in the record is flat — so the flat full-record result is the better-supported one, and it is the version consistent with the near-flat variogram above. Two things stop that being a clean close: the window's decay survives every internal check applied to it, and nothing identifies what was physically different about Mar–Aug 2026, so the four p-values above are still treated as possibly anticonservative. `NOTES.md` has the full treatment, including the sensitivity tables and the pre-specification.
+**One control needed chasing, and it matters.** The tests assume diurnal shape is not itself spatially autocorrelated; if it were, a feature that is spatially structured could inherit geography's significance. A Mantel test on whether shape similarity decays with separation gives **opposite answers on the two time windows**. On the full 18-month record it is flat (r = +0.053, p = 0.518); on the common window it decays clearly (r = −0.215, p = 0.0009). Same monitors, same statistic, same code. The decay is confined to that one span: the same calendar months a year earlier give r = −0.046 (p = 0.59) on the same monitors at the same length, and every seasonal block in the record is flat, so the flat full-record result is the better-supported one, and it is the version consistent with the near-flat variogram above. Two things stop that being a clean close: the window's decay survives every internal check applied to it, and nothing identifies what was physically different about Mar–Aug 2026, so the four p-values above are still treated as possibly anticonservative.
 
 ## Limitations
 
 **Not all monitors report.** At the last check the live CPCB feed carried 17 of the 39 monitors. The app states how many are reporting and falls back to the most recent stored hour when the feed is unreachable.
 
-**The monitor network is sited unlike the city it measures.** Monitors sit at roughly 2.7× the building density of typical inhabited ground (median 244.5 vs 90.4 buildings/km²) and 2.4× the road density, and the densest monitor lands at the 98th percentile of inhabited cells. Where the model extrapolates, it therefore mostly extrapolates *downward* — into quieter, greener, lower-traffic ground it has never seen. Any estimate for a calm residential pocket rests on monitors systematically busier than it, and nothing in the cross-validation score speaks to that, because every held-out monitor is itself one of these busy sites. Mumbai's dense neighbourhoods are largely inside the training range; the gap is at the quiet end.
+**The monitor network is sited unlike the city it measures.** Monitors sit at roughly 2.7× the building density of typical inhabited ground (median 244.5 vs 90.4 buildings/km²) and 2.4× the road density, and the densest monitor lands at the 98th percentile of inhabited cells. Where the model extrapolates, it therefore mostly extrapolates *downward*, into quieter, greener, lower-traffic ground it has never seen. Any estimate for a calm residential pocket rests on monitors systematically busier than it, and nothing in the cross-validation score speaks to that, because every held-out monitor is itself one of these busy sites. Mumbai's dense neighbourhoods are largely inside the training range; the gap is at the quiet end.
 
 **79.8% of the map is masked.** Grid cells whose land use falls outside the range spanned by all 39 monitors get no estimate. At the default resolution that is 458 cells of open water, forest and empty land (the bounding box is a rectangle over a coastal city, and 37% of cells contain no mapped roads or buildings at all), 28 cells that are inhabited but further from a road or industry than any monitor, and 13 for other reasons. The second group is the one worth knowing about; the app can colour the mask by reason.
 
 **The AQI figures are hourly, not official.** CPCB defines the National Air Quality Index on a 24-hour average. The app applies CPCB's published PM2.5 breakpoints to a single hour, so the scale and category names are CPCB's but the number is not the official daily AQI and moves around more.
 
-**Uncertainty scales with concentration, not distance.** Error against distance-to-nearest-monitor measured r = −0.02 — being far from a monitor is not by itself a reason to distrust a cell. The error bar is calibrated on held-out monitors as a function of the predicted level instead.
+**Uncertainty scales with concentration, not distance.** Error against distance-to-nearest-monitor measured r = −0.02: being far from a monitor is not by itself a reason to distrust a cell. The error bar is calibrated on held-out monitors as a function of the predicted level instead.
 
-**113 readings above 500 µg/m³ survive the artefact screen**, kept because the citywide median cleared the corroboration threshold that hour. Some are genuine episodes; a few clear the bar narrowly. See `NOTES.md`.
+**113 readings above 500 µg/m³ survive the artefact screen**, kept because the citywide median cleared the corroboration threshold that hour. Some are genuine episodes; a few clear the bar narrowly.
 
 ## Running it locally
 
@@ -157,7 +157,7 @@ For the **live view**, add a [data.gov.in](https://data.gov.in) API key to a `.e
 DATAGOV_API_KEY=your-key-here
 ```
 
-The key must be authorised for dataset access, not just registered — an unauthorised key returns `403 Key not authorised` and the app falls back with that message.
+The key must be authorised for dataset access, not just registered: an unauthorised key returns `403 Key not authorised` and the app falls back with that message.
 
 ### Rebuilding the data pipeline
 
@@ -184,7 +184,8 @@ data/live.py               data.gov.in live CPCB feed
 scripts/01_check_api.py    API reconnaissance
 scripts/02_features.py     OSM land-use features for any lat/lon
 model/interpolate.py       IDW / kriging / trees, spatial CV, predict_surface
-NOTES.md                   decisions, open questions, findings in full
 ```
 
-`NOTES.md` carries the reasoning behind the choices here, including the ones that changed a conclusion — a weak IDW baseline that made kriging look like a winner, and a leak in the hyperparameter tuning that the group structure had to close.
+## Notes
+
+Built with AI coding assistance. The research question, validation design and interpretation of results are my own.

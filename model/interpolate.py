@@ -45,9 +45,8 @@ import numpy as np
 import pandas as pd
 
 # scipy.optimize and sklearn are imported inside the two functions that need
-# them. Both are cross-validation-only -- the shipped surface is IDW, which
-# needs neither -- and importing sklearn eagerly cost the app 2.6s of start-up
-# for a model it never runs.
+# them, both cross-validation-only. Importing sklearn eagerly cost the app
+# 2.6s of start-up for a model it never runs.
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -63,15 +62,12 @@ GRID_MASK_PATH = ROOT / "data" / "processed" / "grid_masks.npz"
 OSM_FEATURES = ["dist_major_road_m", "road_density_500m", "road_density_1km",
                 "dist_coast_m", "dist_industrial_m", "building_density_500m"]
 
-# The conventional 1/d^2 is not the best setting here -- it leans too hard on
-# the single nearest station, which at these separations is mostly local noise.
-# Each fold picks its own power on its training stations, so the baseline is as
-# strong as it can be without ever consulting the held-out group.
+# The conventional 1/d^2 leans too hard on the single nearest station here, so
+# each fold picks its own power on its training stations.
 IDW_POWERS = (0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0)
 
-# Two stations in different cv_groups are >1 km apart (data/clean.py checks it),
-# so this floor never binds in CV; it only guards a grid cell that lands on top
-# of a station later.
+# Stations in different cv_groups are >1 km apart, so this floor only guards a
+# grid cell that lands on top of a station.
 MIN_DIST_KM = 0.05
 
 VARIOGRAM_BINS = 15
@@ -106,7 +102,7 @@ def load(screen=None):
     stations, three quarters of the readings over 500 are lone hours, and at
     those hours the rest of the city sits at its usual ~23. They are 0.2% of the
     rows and they dominate every squared error, so the flag exists to show
-    whether a result survives them. It is off by default -- screening is a
+    whether a result survives them. It is off by default: screening is a
     cleaning decision, and it belongs in data/clean.py once it is settled.
     """
     if not CLEAN_PATH.exists():
@@ -139,8 +135,8 @@ def select_idw_power(values, avail, dist, sources, groups):
     """Pick the IDW power on the training stations, predicting each from the rest.
 
     Nested inside the fold: the held-out group is never consulted, so the tuned
-    baseline stays an honest one. The inner split drops each training station's
-    whole cv_group too -- tuning against a partner 70 m away would pick the power
+    baseline stays a fair one. The inner split drops each training station's
+    whole cv_group too: tuning against a partner 70 m away would pick the power
     that best exploits a neighbour the real task will not have.
     """
     best, best_rmse = IDW_POWERS[0], np.inf
@@ -228,7 +224,7 @@ def krige(z, avail, dist, sources, targets, params):
 
     Kriging weights depend only on which stations are reporting, not on what
     they report, so the system is solved once per distinct availability pattern
-    and reused across every hour that shares it -- ~5k solves a fold instead of
+    and reused across every hour that shares it, ~5k solves a fold instead of
     one per station-hour.
     """
     n_hours = z.shape[0]
@@ -351,9 +347,8 @@ def cross_validate(wide, feat):
         for k, t in enumerate(targets):
             x, y, ok = design(values, avail, dist, feat, times, t, sources, power)
             preds = {
-                # The city-wide average of the reporting stations. Not a model:
-                # it is the floor any spatial method has to clear to justify
-                # itself, and the variogram says it will be a hard floor.
+                # The city-wide average of the reporting stations. Not a
+                # model: it is the floor any spatial method has to clear.
                 "regional_mean": mean[ok],
                 "idw": x["idw_est"].to_numpy(),
                 "kriging": mean[ok] + sd[ok] * z_krige[ok, k],
@@ -382,7 +377,7 @@ def cross_validate(wide, feat):
 def calibrate_uncertainty(pred, obs, n_bins=20):
     """Per-cell error bars, calibrated on the held-out predictions.
 
-    Error does not grow with distance from the nearest station -- correlation
+    Error does not grow with distance from the nearest station: correlation
     -0.02, which is the pure-nugget variogram showing up again: neighbours were
     not helping much, so being far from them costs little. What error does track
     is the level itself, from RMSE ~10 ug/m3 where the city is clean to ~45
@@ -404,9 +399,8 @@ def calibrate_uncertainty(pred, obs, n_bins=20):
     centres, rmses, w = np.array(centres), np.array(rmses), np.sqrt(np.array(counts))
     a, b = np.linalg.lstsq(np.column_stack([w, w * centres]), w * rmses, rcond=None)[0]
     return {"form": "max(floor, a + b * prediction)", "a": float(a), "b": float(b),
-            # The fitted intercept can land slightly negative, which would hand
-            # back a nonsensical sigma on a very clean hour. Floor it at the
-            # smallest error any calibration bin actually showed.
+            # The fitted intercept can land negative, so floor it at the
+            # smallest error any calibration bin showed.
             "floor": float(rmses.min()),
             "rmse_overall": float(np.sqrt(np.mean((pred - obs) ** 2))),
             "note": "fitted on held-out predictions; error tracks level, not "
@@ -449,27 +443,22 @@ def feature_bounds(feat):
 # --------------------------------------------------------------------------
 # PRODUCTION SURFACE
 #
-# IDW only. Kriging and the trees both lost to it under leave-one-group-out CV
-# and neither is shipped: a model that scores worse is not worth the extra
-# failure surface in an app.
+# IDW only. Kriging and the trees both lost to it under leave-one-group-out
+# CV, so neither is shipped.
 # --------------------------------------------------------------------------
 
-# Cells per axis. 25 over the ~53 km box puts a cell at ~2.1 km, which is about
-# where the variogram goes flat. A finer grid would draw structure the data
-# cannot support, so `cell_km` comes back in the metadata for the app to show.
+# Cells per axis. 25 over the ~53 km box puts a cell at ~2.1 km, about where
+# the variogram goes flat. `cell_km` comes back in the metadata.
 GRID_CELLS = 25
 
-# The resolutions the app's "Map detail" control offers. The extrapolation mask
-# for each is baked ahead of time by --masks, so the deployed app never loads
-# the 41 MB of OSM point clouds -- it only ever needed them to answer a question
-# whose answer does not change: which cells look nothing like a monitor site.
+# The resolutions the app's "Map detail" control offers. Each mask is baked
+# ahead of time by --masks, so the deployed app never loads the 41 MB of OSM
+# point clouds.
 GRID_RESOLUTIONS = (15, 25, 40, 60)
 
-# Why a cell is masked, which matters more than that it is. Emptiness is the
-# uninteresting half -- sea and forest, correctly refused. Remoteness is the
-# real caveat: inhabited ground that is simply farther from a road or an
-# industrial estate than any monitor sits, where the model is extrapolating
-# into quieter land than it was ever trained on.
+# Why a cell is masked. Emptiness is sea and forest, correctly refused.
+# Remoteness is inhabited ground farther from a road or an industrial estate
+# than any monitor sits, which is the caveat worth knowing about.
 MASK_NONE, MASK_EMPTY, MASK_REMOTE, MASK_OTHER = 0, 1, 2, 3
 
 # Falling below the band on these means "less built than anywhere we measured".
@@ -564,9 +553,8 @@ def write_grid_masks(resolutions=GRID_RESOLUTIONS, band=("min", "max")):
         _, kind, reasons = extrapolation_mask(glat.ravel(), glon.ravel(), bounds, band)
         kind, cleared = clear_station_cells(kind, bbox, n)
         payload[f"kind_{n}"] = kind.reshape(n, n).astype(np.int8)
-        # The per-feature counts still describe why cells fell outside the band,
-        # before the monitor override; the aggregates the app displays are
-        # recounted from the mask that actually ships.
+        # Per-feature counts describe why cells fell outside the band, before
+        # the monitor override.
         counts = {k: int(v) for k, v in reasons.items()}
         counts["_empty"] = int((kind == MASK_EMPTY).sum())
         counts["_remote"] = int((kind == MASK_REMOTE).sum())
@@ -627,7 +615,7 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
     The band is min-max, so it is guaranteed to contain every station the model
     trained on. The tighter p01-p99 is available via band=("p01", "p99"), but at
     39 stations p01 sits just above the minimum and 9 stations fall outside
-    their own band -- the mask would shade locations where we hold ground truth.
+    their own band. The mask would shade locations where we hold ground truth.
     It costs 1.4 points of coverage to avoid that, which is worth it here;
     p01-p99 would earn its keep with a few hundred stations, not thirty-nine.
     """
@@ -668,7 +656,7 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
 
     Returns a Surface: predictions, per-cell sigma, and a mask marking cells
     whose land use falls outside anything the model was trained on. The mask is
-    advisory -- values are still returned for masked cells so the app can shade
+    advisory: values are still returned for masked cells so the app can shade
     rather than hole-punch them.
 
     `readings` overrides the stored panel with a station_id -> ug/m3 Series, so
@@ -691,7 +679,7 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
                  and n in baked["kind"])
 
     # The bbox comes from the baked file when there is one, so the deployed app
-    # does not import the OSM module at all -- not even for a constant.
+    # does not import the OSM module at all, not even for a constant.
     bbox = baked["bbox"] if baked is not None else osm_features().BBOX
     lon_min, lat_min, lon_max, lat_max = bbox
     dlon, dlat = (lon_max - lon_min) / n, (lat_max - lat_min) / n

@@ -52,15 +52,13 @@ INTERIM_DIR = ROOT / "data" / "interim"
 # Same region as data/fetch.py: min_lon, min_lat, max_lon, max_lat.
 BBOX = (72.70, 18.85, 73.20, 19.40)
 
-# Fetch a ring beyond the bbox. A station 22 m inside the eastern edge would
-# otherwise get "distance to nearest industrial land" measured only against the
-# industry we happened to download, and the true nearest could sit just outside.
-# 0.05 deg is ~5.5 km; main() checks whether any answer is still censored.
+# Fetch a ring beyond the bbox, so a station near the edge is not measured
+# only against the industry we happened to download. 0.05 deg is ~5.5 km, and
+# main() checks whether any answer is still censored.
 PAD_DEG = 0.05
 
-# Coastline needs far more room. Inland stations sit 20 km+ from the sea, so a
-# 5.5 km ring cannot prove it found the nearest coast, and the layer is ~100
-# ways -- widening it to ~55 km costs nothing and makes the answer defensible.
+# Coastline needs more room: inland stations sit 20 km+ from the sea, and the
+# layer is only ~100 ways, so the ring is widened to ~55 km.
 COAST_PAD_DEG = 0.5
 PADS = {"roads": PAD_DEG, "coastline": COAST_PAD_DEG,
         "industrial": PAD_DEG, "buildings": PAD_DEG}
@@ -71,10 +69,9 @@ USER_AGENT = "mumbai-air-quality-dashboard/0.1"
 OVERPASS_TIMEOUT = 300
 REQUEST_SPACING = 5.0
 
-# Roads and coastlines are lines, but nearest-distance and radius counts want
-# points, so every way is resampled into points this far apart. Doubles as the
-# length quantum for road density: n points within a radius ~= n * SPACING_M
-# metres of road inside it.
+# Roads and coastlines are lines, but the queries want points, so every way is
+# resampled this far apart. Also the length quantum for road density: n points
+# within a radius ~= n * SPACING_M metres of road.
 SPACING_M = 10.0
 
 MAJOR_ROADS = ("motorway", "trunk", "primary", "secondary")

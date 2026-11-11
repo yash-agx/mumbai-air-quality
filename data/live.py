@@ -25,10 +25,8 @@ USER_AGENT = "mumbai-air-quality-dashboard/0.1"
 TIMEOUT = 20
 PAGE = 1000
 
-# The feed names stations differently from OpenAQ ("Bandra Kurla Complex,
-# Mumbai - MPCB" vs "Bandra Kurla Complex"), and Phase 1 already found station
-# naming inconsistent across sources. Coordinates are the reliable join, so a
-# live station is matched to ours when it lands within this distance.
+# The feed names stations differently from OpenAQ, so coordinates are the
+# reliable join: a live station matches ours within this distance.
 MATCH_KM = 2.0
 
 # Older than this and it is not "now" any more, whatever the feed says.
@@ -138,7 +136,7 @@ def parse(records, stations):
 def fetch_live(stations, key=None):
     """Current PM2.5 for our stations. Never raises; failures come back as ok=False.
 
-    `key` lets the caller supply the credential -- the deployed app reads it
+    `key` lets the caller supply the credential: the deployed app reads it
     from Streamlit's secrets manager, where there is no .env to read. Falling
     back to the environment keeps local development working unchanged.
     """

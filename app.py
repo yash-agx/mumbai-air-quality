@@ -28,17 +28,10 @@ TZ = "Asia/Kolkata"
 # --------------------------------------------------------------------------
 # CPCB National Air Quality Index - PM2.5 sub-index.
 #
-# Breakpoints as published by the Central Pollution Control Board: each band is
-# a concentration range in ug/m3 mapped linearly onto an AQI range, with the
-# category name and CPCB's own wording for the health impact.
-#
-# One honest caveat, surfaced in the technical details: the official index is
-# computed on a 24-hour average. This dashboard is hourly, so what is shown is
-# the AQI those breakpoints give for a single hour's concentration -- the right
-# scale and the right categories, but not the official daily number.
-#
-# The top band has no published upper concentration. 380 ug/m3 is the widely
-# used convention for pinning AQI 500; anything above simply reads 500.
+# Each band is a concentration range in ug/m3 mapped linearly onto an AQI
+# range. The official index uses a 24-hour average, so the hourly number here
+# has CPCB's scale and categories but is not the official daily AQI.
+# The top band has no published ceiling; 380 ug/m3 is the usual pin for 500.
 # --------------------------------------------------------------------------
 CPCB_PM25 = [
     #  conc_lo conc_hi  aqi_lo aqi_hi  category
@@ -50,9 +43,8 @@ CPCB_PM25 = [
     (250.0, 380.0, 401, 500, "Severe"),
 ]
 
-# CPCB's published "Associated Health Impacts", quoted rather than paraphrased.
-# Source: Central Pollution Control Board, National Air Quality Index (2014),
-# the table of AQI categories and their associated health impacts.
+# CPCB's published "Associated Health Impacts", quoted from the National Air
+# Quality Index (2014) category table.
 CPCB_HEALTH = {
     "Good": "Minimal impact.",
     "Satisfactory": "May cause minor breathing discomfort to sensitive people.",
@@ -97,10 +89,8 @@ def aqi_from_pm25(pm25):
     return 500, CPCB_PM25[-1][4]
 
 
-# Diverging blue <-> red about a neutral grey. Concentrations at one hour sit in
-# a narrow band, so an absolute ramp renders the whole city as one shade;
-# centring on the hour's own median spends the full ramp on real differences.
-# The two arms are lightness-matched (max dL 0.04) so neither side shouts.
+# Diverging blue <-> red about a neutral grey, centred on the hour's own median
+# so the ramp is spent on real differences. The arms are lightness-matched.
 DIV_LOW = ["#0d366b", "#1c5cab", "#2a78d6", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"]
 DIV_MID = "#f0efec"
 DIV_HIGH = ["#fbd5d4", "#f4a9a8", "#ec7f7e", "#e34948", "#c73332", "#a02524", "#6b1717"]
@@ -116,10 +106,8 @@ MASK_ALPHA = 70
 # 27.6. Aqua is sub-3:1 on a light surface, so the legend labels both in text.
 REASON_COLORS = {1: [27, 175, 122], 2: [235, 104, 52], 3: [140, 138, 132]}
 
-# Plain-language mask reasons. Deliberately NOT "too far from a monitor":
-# Phase 2 measured error against distance to the nearest station and found no
-# relationship (r = -0.02). These cells are refused because the place is unlike
-# anywhere we measure, which is a different claim from being far away.
+# Plain-language mask reasons. Not "too far from a monitor": error does not
+# track distance (r = -0.02). These cells are unlike anywhere we measure.
 REASON_SHORT = {1: "Open land, water or forest",
                 2: "Away from the roads and industry our monitors sit near",
                 3: "Unlike anywhere we have a monitor"}
@@ -135,9 +123,8 @@ REASON_LONG = {
        "by all 39 monitors, so an estimate would be a guess.",
 }
 
-# Time-pattern series. Categorical identity, so slots 1 and 2 of the palette
-# (validated as a pair: CVD dE 9.2, normal-vision 27.6). Measured and estimated
-# also differ by line style, so the distinction never rests on colour alone.
+# Time-pattern series: palette slots 1 and 2, plus different line styles so the
+# distinction never rests on colour alone.
 C_MEASURED = "#2a78d6"
 C_ESTIMATED = "#eb6834"
 C_CITY = "#8c8a84"
@@ -145,10 +132,8 @@ C_CITY = "#8c8a84"
 FEATHER = 0.10
 GRID_DEFAULT = 25
 
-# Session keys for the location feature. The browser's coordinates live only in
-# this session's memory for as long as the tab is open; nothing is written to
-# disk, logged, or put in the URL. They do reach the server, because the
-# interpolation runs there -- the UI says so rather than implying otherwise.
+# Session keys for the location feature. Coordinates stay in session memory,
+# but they do reach the server, because the interpolation runs there.
 GEO_KEY = "geo_position"
 LOCATE_FLAG = "locate_requested"
 
@@ -202,9 +187,7 @@ def engine():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.production()
-    # No OSM warm-up: the extrapolation masks are baked into
-    # data/processed/grid_masks.npz by `python model/interpolate.py --masks`,
-    # so the 41 MB of point clouds are a pipeline input, not a runtime one.
+    # No OSM warm-up: the masks are baked into data/processed/grid_masks.npz.
     if mod.grid_masks() is None:
         raise FileNotFoundError(
             f"{mod.GRID_MASK_PATH.name} is missing - run "
@@ -299,10 +282,8 @@ def contributions(lat, lon, readings, stations, power, top_n=5):
     live["reading"] = live["station_id"].map(readings).astype(float)
     ranked = live.sort_values("weight", ascending=False)
     top = ranked.head(top_n)
-    # How much of the answer the shown rows actually accounts for. At power 0.5
-    # the weighting is deliberately flat, so the top five carry only ~25-35%
-    # and no small group of monitors "makes" the number. Saying so is the
-    # difference between provenance and a misleading highlight reel.
+    # How much of the answer the shown rows account for. At power 0.5 the
+    # weighting is flat, so the top five carry only ~25-35% of it.
     return top, float(top["weight"].sum()), len(ranked)
 
 
@@ -392,11 +373,9 @@ except (SystemExit, FileNotFoundError) as e:
 local_index = wide.index.tz_convert(TZ)
 first, last = local_index.min(), local_index.max()
 
-# Readings are stamped on the UTC hour and IST is UTC+5:30, so every reading
-# lands at half past in local time. The slider picks a whole IST hour and we
-# floor to the UTC hour containing it, which is what predict_surface does
-# internally -- doing it here too keeps the monitor dots on the same hour as the
-# surface. The caption prints the timestamp actually drawn, half past and all.
+# Readings sit on the UTC hour and IST is UTC+5:30, so the slider's IST hour is
+# floored to the UTC hour containing it, as predict_surface does internally.
+# The caption prints the timestamp actually drawn.
 live_utc = wide.index[wide.notna().any(axis=1).to_numpy()]
 latest = live_utc.max().tz_convert(TZ) + pd.Timedelta(minutes=30)
 
@@ -435,9 +414,7 @@ elif st.sidebar.button("Use my location", width="stretch"):
     st.rerun()
 
 # ---------------------------------------------------------------- location
-# Only asked for when the button is pressed, so the browser never prompts for
-# permission on page load. The component resolves rather than rejects on
-# denial, so a refusal arrives as data and the app carries on unchanged.
+# Asked for only when the button is pressed, and a denial arrives as data.
 geo = None
 if st.session_state.get(LOCATE_FLAG):
     from streamlit_js_eval import get_geolocation
@@ -458,10 +435,8 @@ if st.session_state.get(LOCATE_FLAG):
         geo = {"state": "unavailable", "message": "no position returned"}
 
 # ---------------------------------------------------------------- source
-# Live by default; history only when asked for. When the live feed cannot be
-# reached the app does not go blank -- it drops to the newest hour we hold and
-# says so, because a dashboard that renders nothing is worse than one that is
-# honest about being behind.
+# Live by default. If the feed cannot be reached, drop to the newest stored
+# hour and say so rather than rendering nothing.
 snap, live_ok, fallback_reason = None, False, None
 if not history:
     snap = live_snapshot()
@@ -495,11 +470,8 @@ readings = (snap["readings"].dropna() if live_ok
             else (wide.loc[ts].dropna() if ts in wide.index
                   else pd.Series(dtype=float)))
 
-# Centre on the median of the cells actually drawn, not on the median of the
-# reporting monitors. IDW at power 0.5 is a broad weighted average, so the
-# surface tracks the monitor *mean*, and PM2.5 is right-skewed enough that the
-# monitor median can leave 98% of the map on one side of the ramp. The surface
-# median splits the map ~50/50, which is what makes the two arms readable.
+# Centre on the median of the cells drawn, not of the reporting monitors: the
+# monitor median can leave 98% of the map on one side of the ramp.
 inrange = flat_v[~flat_m]
 centre = float(np.median(inrange)) if inrange.size else float(readings.median())
 half = max(float(np.percentile(np.abs(inrange - centre), 95)) if inrange.size else 0.0, 2.0)
@@ -522,9 +494,8 @@ else:
     fill[flat_m, :3] = MASK_GREY
     fill[flat_m, 3] = (alpha[flat_m] * (MASK_ALPHA / 175)).astype(int)
 
-# deck.gl escapes values interpolated into a tooltip template, so any HTML put
-# in the data comes back out as literal tags. Structure lives in the template
-# below; these fields are plain text.
+# deck.gl escapes values put into a tooltip template, so these fields are
+# plain text and the structure lives in the template below.
 glon, glat = np.meshgrid(lons, lats)
 rows = []
 for v, sd, m, k in zip(flat_v, flat_s, flat_m, flat_k):
@@ -610,11 +581,8 @@ _when = ("right now" if live_ok
          else f"{ts.tz_convert(TZ):%d %b %Y, %H:%M}")
 st.markdown(f"#### Air quality across Mumbai, {_when}")
 if relative:
-    # Plain markdown, no inline HTML. A <span> in the middle of a paragraph is
-    # inline HTML, which the markdown renderer escapes and prints as literal
-    # tags; the block-level <div> in the legend below is treated as an HTML
-    # block and does render. The colour bar under the map carries the mapping
-    # anyway, so the words alone are enough here.
+    # Plain markdown, no inline HTML: a <span> mid-paragraph is escaped and
+    # printed as literal tags, unlike the block-level <div> in the legend.
     st.markdown(
         f"Colours compare each area with the citywide middle for this hour "
         f"(**AQI {centre_aqi}, {centre_cat}**). **Blue is cleaner** than the "
@@ -719,9 +687,8 @@ def cell_estimate(i, cell_lat, cell_lon):
     if masked:
         st.warning(f"**No estimate here - {REASON_SHORT[k].lower()}.**\n\n"
                    f"{REASON_LONG[k]}")
-        # A refusal on its own is unhelpful when a real monitor is close by, so
-        # offer the nearest actual measurement. It is a reading, not an estimate
-        # for this square, and is labelled as such.
+        # A refusal alone is unhelpful, so offer the nearest real reading,
+        # labelled as a reading rather than an estimate for this square.
         near, _, _ = contributions(cell_lat, cell_lon, readings, stations,
                                    card["idw_power"], top_n=1)
         if len(near):
@@ -835,8 +802,7 @@ else:
 
 
 # ---------------------------------------------------------------- time patterns
-# Whichever cell the page is focused on: the located one takes priority, then a
-# map click. Both give an index into the current grid plus its centre.
+# The located cell takes priority over a map click; both give a grid index.
 focus = None
 if located is not None and located["state"] == "inside":
     fi = located["idx"]

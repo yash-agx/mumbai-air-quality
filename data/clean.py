@@ -20,18 +20,14 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW_PATH = ROOT / "data" / "raw" / "pm25_raw.parquet"
 CLEAN_PATH = ROOT / "data" / "processed" / "pm25_clean.parquet"
 
-# A valid hourly PM2.5 mean. Anything outside is a sensor fault, not weather:
-# OpenAQ passes through -999 sentinels, and Mumbai has never plausibly held a
-# 1000 ug/m3 hourly average.
+# A valid hourly PM2.5 mean. OpenAQ passes through -999 sentinels, and Mumbai
+# has never held a 1000 ug/m3 hourly average.
 VALID_RANGE = (0.0, 1000.0)
 
 # --------------------------------------------------------------------------
-# SPATIAL CV GROUPS -- do not drop this without reading the note.
-#
-# These station ids sit close enough that holding one out while the other
-# trains is not a real spatial holdout: the model can read the answer off its
-# neighbour and leave-one-station-out CV reports a score it has not earned.
-# Phase 2 must hold out whole cv_group values, never individual station_ids.
+# SPATIAL CV GROUPS. These station ids sit close enough that holding one out
+# while the other trains is not a real spatial holdout, so CV holds out whole
+# cv_group values, never individual station_ids.
 #
 #   bandra_east    3409328 Bandra Kurla Complex - IITM   19.0627,  72.84614
 #                  3409486 Kherwadi_Bandra East - MPCB   19.06321, 72.84563  ~70 m
@@ -65,12 +61,9 @@ PROXIMITY_WARN_KM = 1.0
 # EXCLUDED STATIONS
 #
 #   8039  "Mumbai"  19.07283, 72.88261
-#     294 readings over an 18-month window (2.2% coverage) around a single
-#     12,764 h hole, and a bare city name where every other station carries a
-#     site and an agency -- so it cannot be matched to a real monitoring site
-#     or grouped against its neighbours. It can neither inform an
-#     interpolation nor serve as a held-out station, so it is dropped outright
-#     instead of being carried as a mostly-empty row.
+#     294 readings over an 18-month window (2.2% coverage) and a bare city
+#     name with no site or agency, so it cannot be matched to a real site or
+#     grouped against its neighbours. Dropped outright.
 # --------------------------------------------------------------------------
 EXCLUDE_STATIONS = {8039}
 
@@ -78,29 +71,23 @@ EXCLUDE_STATIONS = {8039}
 # ARTEFACT SCREEN
 #
 # VALID_RANGE only catches the physically absurd. Two narrower rules catch
-# faults that sit inside it, each justified by something in the data rather
-# than by a round number:
+# faults that sit inside it:
 #
 #   saturation   985.0 is the exact maximum at five unrelated stations (Sion,
-#                Borivali East, Airport T2, Mahape, Khadakpada). Independent
-#                sensors do not agree on a maximum to one decimal place unless
-#                it is a ceiling they are all pinned against.
+#                Borivali East, Airport T2, Mahape, Khadakpada), which is a
+#                ceiling they are pinned against rather than weather.
 #
 #   lone spike   A reading above SPIKE_MIN while the median of every other
 #                reporting station that hour is below SPIKE_REGIONAL_MAX.
-#                PM2.5 episodes are regional -- a stagnant winter night lifts
-#                the whole basin. One station at 690 with the rest of the city
-#                at 23 is a sensor, not weather. The corroboration is what does
-#                the work here: a high reading that the city agrees with is
-#                kept no matter how high it goes.
+#                PM2.5 episodes are regional, so a high reading the rest of
+#                the city agrees with is kept however high it goes.
 # --------------------------------------------------------------------------
 SATURATION_VALUE = 985.0
 SPIKE_MIN = 150.0
 SPIKE_REGIONAL_MAX = 50.0
 
-# A sensor stuck on one reading repeats it hour after hour. Runs are measured
-# in unbroken hours: an outage ends a run, because a station reading 41.0
-# before a two-week silence and 41.0 after it was not stuck for two weeks.
+# A stuck sensor repeats one reading. Runs are measured in unbroken hours, so
+# an outage ends a run rather than bridging it.
 STUCK_RUN_HOURS = 24
 
 
@@ -240,9 +227,8 @@ def clean(raw):
 
     df = df.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
 
-    # Mask stuck runs rather than dropping the station: the rest of the series
-    # is usable, and a masked hour is just a missing hour, which the pipeline
-    # already handles everywhere else.
+    # Mask stuck runs rather than dropping the station: a masked hour is just
+    # a missing hour, which the pipeline handles already.
     lengths = run_lengths(df)
     stuck = lengths >= STUCK_RUN_HOURS
     report["stuck_masked"] = int(stuck.sum())
