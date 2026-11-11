@@ -79,15 +79,28 @@ SOURCE_WAQI = "WAQI (CPCB stations, converted from AQI)"
 # --------------------------------------------------------------------------
 # US EPA PM2.5 AQI BREAKPOINTS, as (AQI_lo, AQI_hi, C_lo, C_hi) in ug/m3.
 #
-# WAQI reports the US EPA AQI, not a concentration, so the value has to be run
-# back through this table to get ug/m3. This is the pre-2024 table (AQI 50 at
-# 12.0 ug/m3), which is the one WAQI's US EPA scale has used; EPA's 2024 revision
-# moved the 50 and 150-300 edges, so if WAQI switches tables the low end here
-# reads ~3 ug/m3 high.
+# iaqi.pm25 is an index, not a concentration, so it has to be run back through
+# this table. Checked on 2026-11-11 across 17 Mumbai stations: a station's
+# overall `aqi` equalled its iaqi.pm25 at 15 of them, which is what a
+# sub-index does when PM2.5 dominates, and equalled the AQI computed FROM
+# iaqi.pm25-read-as-ug/m3 at none of them.
 #
-# A converted number is less certain than a data.gov.in one either way: the AQI
-# is reported as an integer, so each step back out lands in a 1-2 ug/m3 bin
-# rather than on a point, and the bins get wider in the higher bands.
+# This is the pre-2024 table (AQI 50 at 12.0 ug/m3), the US EPA scale WAQI
+# documents. A live comparison against data.gov.in could NOT separate it from
+# EPA's 2024 revision: over the 13 stations reporting on both feeds, MAE came
+# to 74.8 ug/m3 with this table and 75.5 with the 2024 one. The tables sit
+# 0.75 ug/m3 apart while the feeds disagree by ~70, so the check has no power
+# to choose between them and this stays on the documented scale.
+#
+# The size of that disagreement is the thing to know about the fallback:
+# converted values ran a median 68 ug/m3 BELOW data.gov.in for the same
+# station, and the feeds are not describing the same window. data.gov.in
+# publishes CPCB's rolling 24-hour average; the WAQI stations were stamped
+# with a single hour (22:00 IST). So the fallback shows where the city is
+# worse, not numbers interchangeable with the primary source.
+#
+# A converted number is coarse either way: the index arrives as an integer, so
+# each step back out lands in a 1-2 ug/m3 bin, wider in the higher bands.
 # --------------------------------------------------------------------------
 EPA_PM25_BREAKPOINTS = (
     (0, 50, 0.0, 12.0),

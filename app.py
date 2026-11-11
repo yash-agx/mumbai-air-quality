@@ -1057,6 +1057,9 @@ come from {snap['source']}. WAQI publishes the US EPA AQI rather than a
 concentration, so each value was converted back to ug/m3 with the pre-2024 EPA
 PM2.5 breakpoints. That conversion is approximate: the AQI arrives as an
 integer, so a value lands in a 1-2 ug/m3 bin at the clean end and a wider one
-higher up. WAQI does not state the averaging window per station, though the US
-EPA PM2.5 index it reports is also defined on 24 hours. {snap['attribution']}.
+higher up. The two feeds also do not cover the same window: in a 13-station
+check on 2026-11-11 the converted values ran a median 68 ug/m3 below
+data.gov.in for the same station, which stamps a 24-hour average where WAQI
+stamped a single hour. Read a fallback map as where the city is worse, not as
+numbers comparable with the primary source. {snap['attribution']}.
 """)
