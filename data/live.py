@@ -5,19 +5,23 @@ CPCB data on a lag - measured at ~63 hours behind for the Mumbai stations, so it
 cannot serve a "latest published" view. data.gov.in publishes the same CPCB
 network in near real time, which is what this module reads first.
 
-What it publishes is a rolling 24-hour average, not an hourly reading: CPCB's
-AQI is defined on the preceding 24 hours (at least 16 of them), and each record
-carries min_value and max_value across that same window. Verified against the
-feed on 2026-11-11, where all 25 Mumbai PM2.5 records had min < max with a
-median spread of 252 ug/m3, which no single hour can hold. The app says so
-rather than calling these values current-hour readings.
+What data.gov.in publishes is a rolling 24-hour average, not an hourly
+reading: CPCB's AQI is defined on the preceding 24 hours (at least 16 of them),
+and each record carries min_value and max_value across that same window.
+Verified against the feed on 2026-11-11, where all 25 Mumbai PM2.5 records had
+min < max with a median spread of 252 ug/m3, which no single hour can hold.
 
 data.gov.in blocks requests from Streamlit Cloud's servers, so the deployed app
 cannot use it even with a valid key, while it works fine from India. WAQI is
 therefore tried as a fallback: it republishes the same CPCB stations, but as US
-AQI rather than ug/m3. Each matched station's PM2.5 sub-index (iaqi.pm25) is
-read from its own feed and converted back to a concentration (see aqi_to_ugm3),
-and the source string says which feed the numbers came from.
+AQI rather than ug/m3, and over a single hour rather than over a day. Each
+matched station's PM2.5 sub-index (iaqi.pm25) is read from its own feed and
+converted back to a concentration (see aqi_to_ugm3).
+
+So the two feeds do not describe the same quantity, and the deployed app runs
+on the fallback. LiveResult carries `source` and `rolling_24h` for that reason:
+the app has to say which window the numbers it is drawing came from, and it
+cannot assume the primary answered.
 
 fetch_live() never raises. The app has to render something whatever the network
 or the upstream API is doing, so every failure comes back as a LiveResult with
@@ -125,6 +129,10 @@ class LiveResult:
     error: str = None
     hint: str = None
     attribution: str = None
+    # True when one value is CPCB's rolling 24-hour average (data.gov.in),
+    # False when it is a single hour (WAQI). The app's wording turns on this,
+    # so it is a field rather than something inferred from `source`.
+    rolling_24h: bool = False
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -368,11 +376,12 @@ def parse_waqi(rows, stations, feed, budget_s=WAQI_BUDGET_S):
 
 
 def _finish(readings, observed, unmatched, stations, source, name,
-            attribution=None):
+            rolling_24h, attribution=None):
     """The checks both sources share: anything matched, and is it current?"""
     if readings.empty:
         return LiveResult(
             ok=False, n_total=len(stations), unmatched=unmatched, source=source,
+            rolling_24h=rolling_24h,
             error=f"{name} answered but reported no PM2.5 for any of our "
                   f"monitors right now")
 
@@ -383,14 +392,14 @@ def _finish(readings, observed, unmatched, stations, source, name,
         return LiveResult(
             ok=False, readings=readings, observed_at=observed,
             n_reporting=len(readings), n_total=len(stations), unmatched=unmatched,
-            source=source,
+            source=source, rolling_24h=rolling_24h,
             error=f"The {name} feed's newest reading is {age_h:.0f} hours old, "
                   f"which is not current")
 
     return LiveResult(ok=True, readings=readings, observed_at=observed,
                       n_reporting=len(readings), n_total=len(stations),
                       unmatched=unmatched, source=source,
-                      attribution=attribution)
+                      rolling_24h=rolling_24h, attribution=attribution)
 
 
 def _fetch_datagov(stations, key=None):
@@ -419,8 +428,9 @@ def _fetch_datagov(stations, key=None):
                           error=f"data.gov.in returned something unreadable ({e})")
 
     readings, observed, unmatched = parse(records, stations)
+    # avg_value is CPCB's rolling 24-hour mean.
     return _finish(readings, observed, unmatched, stations, SOURCE_DATAGOV,
-                   "data.gov.in")
+                   "data.gov.in", rolling_24h=True)
 
 
 def _fetch_waqi(stations, token=None):
@@ -450,14 +460,18 @@ def _fetch_waqi(stations, token=None):
 
     readings, observed, unmatched = parse_waqi(rows, stations,
                                               _station_feed(token))
+    # Each station's feed is stamped at one hour (time.iso), and the values ran
+    # far below the same stations' 24-hour averages, so these are not day means.
     return _finish(readings, observed, unmatched, stations, SOURCE_WAQI, "WAQI",
-                   attribution=WAQI_ATTRIBUTION)
+                   rolling_24h=False, attribution=WAQI_ATTRIBUTION)
 
 
 def fetch_live(stations, key=None, token=None):
-    """Latest published PM2.5 for our stations, as a rolling 24-hour average.
+    """Latest published PM2.5 for our stations.
 
-    Never raises; failures come back as ok=False.
+    Never raises; failures come back as ok=False. `rolling_24h` on the result
+    says what one value covers, which differs by source: data.gov.in gives
+    CPCB's rolling 24-hour average, WAQI a single hour.
 
     Tries data.gov.in first and falls back to WAQI, whose values are converted
     from US AQI. The returned LiveResult says which source answered.

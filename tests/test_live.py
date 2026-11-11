@@ -581,3 +581,64 @@ def test_primary_parse_still_filters_on_pollutant(live_mod, stations, http):
 def test_source_strings_are_the_two_the_app_shows(live_mod):
     assert live_mod.SOURCE_DATAGOV == "data.gov.in (CPCB)"
     assert live_mod.SOURCE_WAQI == "WAQI (CPCB stations, converted from AQI)"
+
+
+# --------------------------------------------------------------------------
+# Which averaging window the result claims
+#
+# The app words itself from this flag, and the deployed app is always on the
+# WAQI path, so getting it wrong means telling every visitor that a one-hour
+# reading is a day's average.
+# --------------------------------------------------------------------------
+
+def test_datagov_result_says_rolling_24h(live_mod, stations, http):
+    """avg_value is CPCB's rolling 24-hour mean."""
+    http.handlers["data.gov.in"] = datagov_payload([
+        datagov_record(19.001, 72.821, 41.0)])
+
+    res = live_mod.fetch_live(stations, key="k", token="t")
+    assert res.ok
+    assert res.rolling_24h is True
+
+
+def test_waqi_result_says_single_hour(live_mod, stations, http):
+    """A WAQI feed is stamped at one hour, so it is not a day average."""
+    http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151)})
+
+    res = live_mod.fetch_live(stations, key="k", token="t")
+    assert res.ok
+    assert res.source == live_mod.SOURCE_WAQI
+    assert res.rolling_24h is False
+
+
+def test_the_window_flag_tracks_the_source_not_the_call(live_mod, stations, http):
+    """Same call, two sources, two windows: the flag follows whoever answered."""
+    http.handlers["data.gov.in"] = datagov_payload([
+        datagov_record(19.001, 72.821, 41.0)])
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151)})
+    primary = live_mod.fetch_live(stations, key="k", token="t")
+
+    http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
+    fallback = live_mod.fetch_live(stations, key="k", token="t")
+
+    assert (primary.source, primary.rolling_24h) == (live_mod.SOURCE_DATAGOV, True)
+    assert (fallback.source, fallback.rolling_24h) == (live_mod.SOURCE_WAQI, False)
+
+
+def test_window_flag_survives_a_stale_result(live_mod, stations, http):
+    """Stale or not, a WAQI value is still a single hour."""
+    http.handlers["data.gov.in"] = requests.exceptions.ConnectionError("blocked")
+    waqi_http(http, [waqi_row(19.001, 72.821, uid=11)],
+              {11: waqi_feed(pm25=151, stamp="2020-01-01T10:00:00+05:30")})
+
+    res = live_mod.fetch_live(stations, key="k", token="t")
+    assert not res.ok
+    assert res.rolling_24h is False
+
+
+def test_a_default_result_does_not_claim_a_day_average(live_mod):
+    """The error paths carry the weaker claim, so no wording overstates."""
+    assert live_mod.LiveResult(ok=False).rolling_24h is False

@@ -30,8 +30,9 @@ TZ = "Asia/Kolkata"
 #
 # Each band is a concentration range in ug/m3 mapped linearly onto an AQI
 # range. CPCB's index is defined on a rolling 24-hour average, which is the
-# window the live feed already publishes on; the stored history is hourly, so
-# a historical figure has CPCB's scale and categories but not its window.
+# window data.gov.in publishes on. The WAQI fallback and the stored history are
+# both hourly, so a figure from either has CPCB's scale and categories but not
+# its window.
 # The top band has no published ceiling; 380 ug/m3 is the usual pin for 500.
 # --------------------------------------------------------------------------
 CPCB_PM25 = [
@@ -451,13 +452,34 @@ if not history:
     if not live_ok:
         fallback_reason = snap["error"]
 
-# One station value does not mean the same thing in both modes. The live CPCB
-# feed publishes a rolling 24-hour average every hour, which is the window
-# CPCB's AQI is defined on; the same record carries min_value and max_value,
-# the extremes across that window (checked 2026-11-11: all 25 Mumbai PM2.5
-# records had min < max, median spread 252 ug/m3, so it is not one hour). The
-# stored history is hourly means from OpenAQ, where "this hour" is literal.
-period_phrase = "this 24-hour average" if live_ok else "this hour"
+# One station value does not mean the same thing in all three modes, and the
+# deployed app is on the one that is easiest to get wrong:
+#
+#   data.gov.in  CPCB's rolling 24-hour average, the window its AQI is defined
+#                on (the same record carries the min and max across it)
+#   WAQI         a single hour, stamped per station
+#   history      hourly means from OpenAQ
+#
+# data.gov.in blocks Streamlit Cloud, so the deployed app is always on WAQI and
+# must not call those readings day averages. live.py reports which it is rather
+# than the app guessing from the source string.
+rolling_24h = bool(live_ok and snap["rolling_24h"])
+period_phrase = "this 24-hour average" if rolling_24h else "this hour"
+
+# The technical panel's sentence on what the drawn numbers cover. Written per
+# source so the 24-hour description is never attached to hourly values.
+if rolling_24h:
+    window_note = ("These figures come from data.gov.in, which publishes that "
+                   "24-hour average with the min and max across the window "
+                   "alongside it, so they sit on CPCB's own window.")
+elif live_ok:
+    window_note = ("These figures come from the WAQI fallback, which stamps a "
+                   "single hour per station, so they apply CPCB's breakpoints "
+                   "to one hour and move around more than a daily number does.")
+else:
+    window_note = ("These figures come from the stored history, which is "
+                   "hourly means, so they apply CPCB's breakpoints to one hour "
+                   "and move around more than a daily number does.")
 
 t_surface = time.perf_counter()
 if live_ok:
@@ -579,8 +601,10 @@ if live_ok:
         f"**Live** - {snap['n_reporting']} of {snap['n_total']} monitors reporting, "
         f"published {ts.tz_convert(TZ):%H:%M} "
         f"({'just now' if age_min < 5 else f'{age_min:.0f} min ago'}). "
-        f"Each monitor value is a rolling 24-hour average, not a single hour. "
-        f"Source: {snap['source']}.")
+        + (f"Each monitor value is a rolling 24-hour average, not a single "
+           f"hour. " if rolling_24h else
+           f"Each monitor value is a single-hour reading. ")
+        + f"Source: {snap['source']}.")
     # WAQI's terms require the attribution to appear wherever its data is shown.
     if snap.get("attribution"):
         st.caption(snap["attribution"])
@@ -596,7 +620,8 @@ else:
         + (f"\n\n{snap['hint']}" if snap and snap.get("hint") else ""))
 
 # ---------------------------------------------------------------- explainer
-_when = (f"24-hour average to {ts.tz_convert(TZ):%H:%M}" if live_ok
+_when = (f"24-hour average to {ts.tz_convert(TZ):%H:%M}" if rolling_24h
+         else f"latest reading {ts.tz_convert(TZ):%H:%M}" if live_ok
          else f"{ts.tz_convert(TZ):%d %b %Y, %H:%M}")
 st.markdown(f"#### Air quality across Mumbai, {_when}")
 if relative:
@@ -1035,13 +1060,10 @@ with st.expander("Technical details"):
 | Render | surface {1000 * t_surface:.0f} ms, page {total_ms:.0f} ms |
 
 **On the AQI figures and what one value covers.** CPCB defines the National
-AQI on a rolling 24-hour average concentration. The live feed publishes exactly
-that: each station value is the average over the preceding 24 hours, with the
-min and max across that window alongside it. So a live figure here sits on
-CPCB's own window, while the stored history is hourly means and a historical
-figure applies CPCB's breakpoints to a single hour, which moves around more.
-Either way this is the PM2.5 sub-index alone, not the official published AQI,
-which CPCB takes as the worst of eight pollutants.
+AQI on a 24-hour average concentration, which is not what every source here
+supplies. {window_note} Whichever it is, this is the PM2.5 sub-index alone,
+not the official published AQI, which CPCB takes as the worst of eight
+pollutants.
 
 **On the error bar.** Uncertainty is calibrated against held-out monitors and
 scales with the concentration, not with distance from a monitor - error against
