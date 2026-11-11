@@ -2,6 +2,7 @@
 #   data/fetch.py           OpenAQ pull            python-dateutil
 #   scripts/02_features.py  OSM features           scipy, matplotlib
 #   model/interpolate.py    cross-validation       scipy, scikit-learn
+#   tests/                  test suite             pytest
 #
 # None of these are imported by app.py at runtime: the extrapolation masks the
 # app needs are baked to data/processed/grid_masks.npz by
@@ -13,3 +14,6 @@ scipy==1.18.1
 matplotlib==3.11.1
 scikit-learn==1.9.0
 python-dateutil==2.9.0.post0
+# The suite also needs pyarrow, which requirements.txt already pins: one test
+# round-trips a station-features fixture through parquet, as the pipeline does.
+pytest==9.2.0

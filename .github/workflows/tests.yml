@@ -1,0 +1,33 @@
+name: tests
+
+# Every push, plus pull requests so a fork's branch is checked once rather than
+# twice. The suite is self-contained -- no Overpass call, no OpenAQ key, and
+# nothing read out of data/raw or data/interim -- so there is nothing to set up
+# beyond the dependencies.
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches runtime.txt, which is what Streamlit Cloud deploys on.
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # requirements-dev.txt pulls in requirements.txt itself.
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest
