@@ -1,6 +1,6 @@
 # Mumbai Air Quality
 
-Interactive map of PM2.5 across the Mumbai metropolitan region, interpolating between the region's sparse ground monitors to estimate air quality at locations that have none. It shows current CPCB readings by default and can be rewound to any hour in an 18-month history.
+Interactive map of PM2.5 across the Mumbai metropolitan region, interpolating between the region's sparse ground monitors to estimate air quality at locations that have none. It shows the latest published CPCB readings by default and can be rewound to any hour in an 18-month history.
 
 **Live app:** https://mumbai-air-quality.streamlit.app
 **Repository:** https://github.com/yash-agx/mumbai-air-quality
@@ -20,7 +20,7 @@ So most of the city has no monitor, and the places without one are not a random 
 | | source | detail |
 |---|---|---|
 | History | [OpenAQ](https://openaq.org) v3 (republishing CPCB/MPCB/IITM) | 39 stations, 376,131 hourly readings, 2025-02-27 to 2026-08-27 (545 days) |
-| Live | [data.gov.in](https://data.gov.in) CPCB real-time feed | current hour, matched to the same 39 stations by coordinates |
+| Live | [data.gov.in](https://data.gov.in) CPCB real-time feed | rolling 24-hour average, republished each hour, matched to the same 39 stations by coordinates |
 | Live fallback | [WAQI](https://waqi.info) map/bounds, then one station feed each | the same CPCB stations as US AQI, converted back to µg/m³, used when data.gov.in is unreachable |
 | Land use | [OpenStreetMap](https://www.openstreetmap.org) via Overpass | roads, coastline, industrial land use, building footprints |
 
@@ -132,7 +132,9 @@ If each site has its own daily rhythm, the obvious next question is whether the 
 
 **79.8% of the map is masked.** Grid cells whose land use falls outside the range spanned by all 39 monitors get no estimate. At the default resolution that is 458 cells of open water, forest and empty land (the bounding box is a rectangle over a coastal city, and 37% of cells contain no mapped roads or buildings at all), 28 cells that are inhabited but further from a road or industry than any monitor, and 13 for other reasons. The second group is the one worth knowing about; the app can colour the mask by reason.
 
-**The AQI figures are hourly, not official.** CPCB defines the National Air Quality Index on a 24-hour average. The app applies CPCB's published PM2.5 breakpoints to a single hour, so the scale and category names are CPCB's but the number is not the official daily AQI and moves around more.
+**The AQI figures are a PM2.5 sub-index, not the official AQI.** CPCB defines the National Air Quality Index on a rolling 24-hour average, and takes the worst of eight pollutants. The live feed publishes that 24-hour average, so a live figure sits on CPCB's window; the stored history is hourly means, so a historical figure applies CPCB's breakpoints to a single hour and moves around more. Either way the scale and category names are CPCB's and the number covers PM2.5 alone.
+
+**A live value is not a snapshot of this minute.** Each live monitor value is the average over the preceding 24 hours, which is what CPCB publishes: the same record carries the min and max across that window, and on 2026-11-11 all 25 Mumbai PM2.5 records spanned a median 252 µg/m³ between them. The map therefore shows where the last day has been worse or better, not where the air is worst right now.
 
 **Uncertainty scales with concentration, not distance.** Error against distance-to-nearest-monitor measured r = −0.02: being far from a monitor is not by itself a reason to distrust a cell. The error bar is calibrated on held-out monitors as a function of the predicted level instead.
 

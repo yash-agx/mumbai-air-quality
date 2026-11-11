@@ -29,8 +29,9 @@ TZ = "Asia/Kolkata"
 # CPCB National Air Quality Index - PM2.5 sub-index.
 #
 # Each band is a concentration range in ug/m3 mapped linearly onto an AQI
-# range. The official index uses a 24-hour average, so the hourly number here
-# has CPCB's scale and categories but is not the official daily AQI.
+# range. CPCB's index is defined on a rolling 24-hour average, which is the
+# window the live feed already publishes on; the stored history is hourly, so
+# a historical figure has CPCB's scale and categories but not its window.
 # The top band has no published ceiling; 380 ug/m3 is the usual pin for 500.
 # --------------------------------------------------------------------------
 CPCB_PM25 = [
@@ -401,9 +402,9 @@ else:
 
 scale = st.sidebar.radio(
     "Colour scale", ["Compare across the city", "Absolute AQI scale"],
-    help="Comparing centres the colours on this hour's citywide middle, so you "
-         "can see which areas are better or worse than the rest. Absolute fixes "
-         "the scale so colours mean the same thing at every hour.")
+    help="Comparing centres the colours on the citywide middle of whatever is "
+         "shown, so you can see which areas are better or worse than the rest. "
+         "Absolute fixes the scale so colours mean the same thing every time.")
 explain = st.sidebar.toggle("Show why grey areas are grey", value=False)
 resolution = st.sidebar.select_slider("Map detail", [15, 25, 40, 60],
                                       value=GRID_DEFAULT)
@@ -449,6 +450,14 @@ if not history:
     live_ok = snap["ok"]
     if not live_ok:
         fallback_reason = snap["error"]
+
+# One station value does not mean the same thing in both modes. The live CPCB
+# feed publishes a rolling 24-hour average every hour, which is the window
+# CPCB's AQI is defined on; the same record carries min_value and max_value,
+# the extremes across that window (checked 2026-11-11: all 25 Mumbai PM2.5
+# records had min < max, median spread 252 ug/m3, so it is not one hour). The
+# stored history is hourly means from OpenAQ, where "this hour" is literal.
+period_phrase = "this 24-hour average" if live_ok else "this hour"
 
 t_surface = time.perf_counter()
 if live_ok:
@@ -558,7 +567,7 @@ for v in vals:
         p2.append(f"{v:.0f} ug/m3 PM2.5 - measured here")
     else:
         p_title.append("Monitor offline")
-        p2.append("no reading this hour")
+        p2.append("no reading")
 pts["title"], pts["line2"] = p_title, p2
 pts["line3"] = pts["site"]
 pts["line4"] = "Government monitoring station"
@@ -568,8 +577,9 @@ if live_ok:
     age_min = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60
     st.success(
         f"**Live** - {snap['n_reporting']} of {snap['n_total']} monitors reporting, "
-        f"updated {ts.tz_convert(TZ):%H:%M} "
+        f"published {ts.tz_convert(TZ):%H:%M} "
         f"({'just now' if age_min < 5 else f'{age_min:.0f} min ago'}). "
+        f"Each monitor value is a rolling 24-hour average, not a single hour. "
         f"Source: {snap['source']}.")
     # WAQI's terms require the attribution to appear wherever its data is shown.
     if snap.get("attribution"):
@@ -586,14 +596,15 @@ else:
         + (f"\n\n{snap['hint']}" if snap and snap.get("hint") else ""))
 
 # ---------------------------------------------------------------- explainer
-_when = ("right now" if live_ok
+_when = (f"24-hour average to {ts.tz_convert(TZ):%H:%M}" if live_ok
          else f"{ts.tz_convert(TZ):%d %b %Y, %H:%M}")
 st.markdown(f"#### Air quality across Mumbai, {_when}")
 if relative:
     # Plain markdown, no inline HTML: a <span> mid-paragraph is escaped and
     # printed as literal tags, unlike the block-level <div> in the legend.
     st.markdown(
-        f"Colours compare each area with the citywide middle for this hour "
+        f"Colours compare each area with the citywide middle for "
+        f"{period_phrase} "
         f"(**AQI {centre_aqi}, {centre_cat}**). **Blue is cleaner** than the "
         f"rest of the city, **red is dirtier**. Grey areas are ones we cannot "
         f"put a number on, because they look nothing like anywhere we have a "
@@ -705,7 +716,7 @@ def cell_estimate(i, cell_lat, cell_lon):
             n_aqi, n_cat = aqi_from_pm25(r["reading"])
             st.markdown(
                 f"The nearest monitor is **{r['site']}**, {r['km']:.1f} km away, "
-                f"currently reading **AQI {n_aqi} - {n_cat}** "
+                f"reading **AQI {n_aqi} - {n_cat}** "
                 f"({r['reading']:.0f} ug/m3). That is a measurement at the "
                 f"monitor, not an estimate for this square.")
             st.caption(CPCB_SOURCE)
@@ -713,11 +724,11 @@ def cell_estimate(i, cell_lat, cell_lon):
 
     diff = v - centre
     if abs(diff) < 1:
-        comparison = "about the same as the citywide middle this hour"
+        comparison = f"about the same as the citywide middle for {period_phrase}"
     else:
         comparison = (f"{abs(diff):.0f} ug/m3 "
                       f"{'dirtier' if diff > 0 else 'cleaner'} than the "
-                      f"citywide middle this hour")
+                      f"citywide middle for {period_phrase}")
     st.markdown(
         f"**AQI {aqi} - {cat}** &nbsp;·&nbsp; {v:.0f} ug/m3 PM2.5, "
         f"could be {sd:.0f} higher or lower.\n\n"
@@ -797,7 +808,7 @@ elif picked[0] == "monitors":
     st.markdown(f"#### {obj.get('line3', 'This monitor')}")
     v = obj.get("value")
     if v is None or not np.isfinite(float(v)):
-        st.info("This monitor did not report a reading for this hour.")
+        st.info("This monitor did not report a reading.")
     else:
         aqi, cat = aqi_from_pm25(float(v))
         st.markdown(f"**AQI {aqi} - {cat}** &nbsp;·&nbsp; {float(v):.0f} ug/m3 PM2.5")
@@ -1023,11 +1034,14 @@ with st.expander("Technical details"):
 | Uncertainty | sigma = max({card['uncertainty']['floor']:.2f}, {card['uncertainty']['a']:.2f} + {card['uncertainty']['b']:.3f} x prediction) |
 | Render | surface {1000 * t_surface:.0f} ms, page {total_ms:.0f} ms |
 
-**On the AQI figures.** CPCB defines the National AQI on a 24-hour average
-concentration. This dashboard is hourly, so the numbers here apply the CPCB
-PM2.5 breakpoints to a single hour's value. The scale and category names are
-CPCB's; the figure is not the official daily AQI and moves around more than a
-daily number does.
+**On the AQI figures and what one value covers.** CPCB defines the National
+AQI on a rolling 24-hour average concentration. The live feed publishes exactly
+that: each station value is the average over the preceding 24 hours, with the
+min and max across that window alongside it. So a live figure here sits on
+CPCB's own window, while the stored history is hourly means and a historical
+figure applies CPCB's breakpoints to a single hour, which moves around more.
+Either way this is the PM2.5 sub-index alone, not the official published AQI,
+which CPCB takes as the worst of eight pollutants.
 
 **On the error bar.** Uncertainty is calibrated against held-out monitors and
 scales with the concentration, not with distance from a monitor - error against
@@ -1043,5 +1057,6 @@ come from {snap['source']}. WAQI publishes the US EPA AQI rather than a
 concentration, so each value was converted back to ug/m3 with the pre-2024 EPA
 PM2.5 breakpoints. That conversion is approximate: the AQI arrives as an
 integer, so a value lands in a 1-2 ug/m3 bin at the clean end and a wider one
-higher up. {snap['attribution']}.
+higher up. WAQI does not state the averaging window per station, though the US
+EPA PM2.5 index it reports is also defined on 24 hours. {snap['attribution']}.
 """)

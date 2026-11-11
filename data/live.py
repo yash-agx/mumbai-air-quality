@@ -2,8 +2,15 @@
 
 The historical pipeline (data/fetch.py) pulls from OpenAQ, which republishes
 CPCB data on a lag - measured at ~63 hours behind for the Mumbai stations, so it
-cannot serve a "right now" view. data.gov.in publishes the same CPCB network in
-near real time, which is what this module reads first.
+cannot serve a "latest published" view. data.gov.in publishes the same CPCB
+network in near real time, which is what this module reads first.
+
+What it publishes is a rolling 24-hour average, not an hourly reading: CPCB's
+AQI is defined on the preceding 24 hours (at least 16 of them), and each record
+carries min_value and max_value across that same window. Verified against the
+feed on 2026-11-11, where all 25 Mumbai PM2.5 records had min < max with a
+median spread of 252 ug/m3, which no single hour can hold. The app says so
+rather than calling these values current-hour readings.
 
 data.gov.in blocks requests from Streamlit Cloud's servers, so the deployed app
 cannot use it even with a valid key, while it works fine from India. WAQI is
@@ -78,10 +85,9 @@ SOURCE_WAQI = "WAQI (CPCB stations, converted from AQI)"
 # moved the 50 and 150-300 edges, so if WAQI switches tables the low end here
 # reads ~3 ug/m3 high.
 #
-# Two reasons to treat a converted number as less certain than a data.gov.in
-# one: the AQI is reported as an integer, so each step back out is a 1-2 ug/m3
-# bin rather than a point (coarser in the higher bands), and the official AQI is
-# computed on a 24-hour average while these readings are hourly.
+# A converted number is less certain than a data.gov.in one either way: the AQI
+# is reported as an integer, so each step back out lands in a 1-2 ug/m3 bin
+# rather than on a point, and the bins get wider in the higher bands.
 # --------------------------------------------------------------------------
 EPA_PM25_BREAKPOINTS = (
     (0, 50, 0.0, 12.0),
@@ -230,9 +236,14 @@ def nearest_station(lat, lon, stations):
 def parse(records, stations):
     """Map the feed's PM2.5 records onto our station ids by coordinates.
 
-    Field names have shifted across versions of this dataset (pollutant_avg was
-    once pollutant_value), so each is looked up through a list of aliases rather
-    than assumed.
+    Field names have shifted across versions of this dataset (the API's own
+    field list currently calls them pollutant_min/max/avg with ids
+    min_value/max_value/avg_value), so each is looked up through a list of
+    aliases rather than assumed.
+
+    The value taken is the average one, which is CPCB's rolling 24-hour mean
+    for that station; min_value and max_value bound the same window and are
+    not read.
     """
     values, stamps, unmatched = {}, [], 0
     for rec in records:
@@ -431,7 +442,9 @@ def _fetch_waqi(stations, token=None):
 
 
 def fetch_live(stations, key=None, token=None):
-    """Current PM2.5 for our stations. Never raises; failures come back as ok=False.
+    """Latest published PM2.5 for our stations, as a rolling 24-hour average.
+
+    Never raises; failures come back as ok=False.
 
     Tries data.gov.in first and falls back to WAQI, whose values are converted
     from US AQI. The returned LiveResult says which source answered.
