@@ -1,14 +1,15 @@
 """Every project file must parse on the Python runtime.txt pins.
 
-runtime.txt says 3.11, and app.py had f-strings that only parse on 3.12+: PEP
-701 lifted the ban on reusing the enclosing quote inside a replacement field,
-so `f"{d["k"]}"` is fine on 3.12 and a SyntaxError on 3.11. Nothing imports
-app.py (it is a Streamlit script), so nothing else here would catch it.
+runtime.txt and CI now both say 3.12, raised because numpy 2.5 and scipy 1.18
+do not build below it. Nothing imports app.py (it is a Streamlit script), so
+compile() here is the only thing that would catch a file that does not parse.
 
-Two checks, because each only bites on one version:
-  - compile() rejects the 3.12-only syntax outright when run on 3.11, which is
-    what CI runs.
-  - the token scan finds it on 3.12+, which is what a laptop runs.
+The second check dates from the 3.11 floor: PEP 701 lifted the ban on reusing
+the enclosing quote inside a replacement field, so `f"{d["k"]}"` parses on 3.12
+and is a SyntaxError on 3.11, and app.py had exactly that. On 3.11 compile()
+rejected it outright; on 3.12 it parses, so the token scan was what found it
+there. That syntax is legal on the floor this project now pins, so the scan
+guards a constraint that no longer binds and could be dropped.
 """
 
 import io
@@ -74,7 +75,7 @@ def test_the_scan_covers_the_files_that_matter():
 @pytest.mark.parametrize("path", PROJECT_FILES,
                          ids=lambda p: p.relative_to(ROOT).as_posix())
 def test_file_compiles_on_this_interpreter(path):
-    """On 3.11 this is the check: 3.12-only f-strings are a SyntaxError here."""
+    """The parse check. On the old 3.11 floor this also caught PEP 701 syntax."""
     compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
 
 

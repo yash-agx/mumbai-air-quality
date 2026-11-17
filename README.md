@@ -142,7 +142,7 @@ If each site has its own daily rhythm, the obvious next question is whether the 
 
 ## Running it locally
 
-Requires Python ≥3.11 (pandas 3.x and numpy 2.x).
+Requires Python ≥3.12 (numpy 2.5 and scipy 1.18 do not build below it).
 
 ```bash
 git clone https://github.com/yash-agx/mumbai-air-quality.git
