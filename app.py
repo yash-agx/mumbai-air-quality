@@ -220,8 +220,69 @@ def feather_alpha(n):
     return np.minimum.outer(f, f).ravel()
 
 
+# --------------------------------------------------------------------------
+# Cache versioning.
+#
+# Streamlit's caches outlive the code that filled them. A process that is still
+# running after a deploy keeps every cached value it already holds, so new page
+# code can be served an object built by the previous version - which is exactly
+# how this app once ran against a model module that predated a function it had
+# started calling, and died with an AttributeError.
+#
+# So every cached function takes a `version` argument built from the files its
+# result depends on: the model source, and the artefacts the model reads. Change
+# any of them and the call is a different cache entry rather than a stale hit.
+#
+# Two rules this depends on, both verified against the installed Streamlit
+# rather than assumed:
+#   - the key is built from the arguments actually PASSED, so `version` has to
+#     be handed over at the call site. A default value is invisible to the
+#     cache, and the key would never change.
+#   - arguments whose name starts with "_" are deliberately not hashed, so this
+#     one must never be renamed to `_version`.
+# --------------------------------------------------------------------------
+MODEL_SOURCE = ROOT / "model" / "interpolate.py"
+LIVE_SOURCE = ROOT / "data" / "live.py"
+PROCESSED = ROOT / "data" / "processed"
+
+# What a surface, a panel or a model card is computed from. The baked masks are
+# in here too: they changed shape once, and cached surfaces built before that
+# would have been served without the new per-cell flags.
+MODEL_INPUTS = (MODEL_SOURCE,
+                PROCESSED / "pm25_clean.parquet",
+                PROCESSED / "station_features.parquet",
+                PROCESSED / "model_card.json",
+                PROCESSED / "feature_bounds.json",
+                PROCESSED / "grid_masks.npz")
+
+
+def fingerprint(*paths):
+    """Size and modification time of each path, as one string.
+
+    stat() rather than a content hash: this runs on every rerun and the parquet
+    inputs are megabytes. A rewrite with identical bytes costs one needless
+    recompute; the opposite mistake serves a stale answer until the process
+    restarts. A missing file is itself a version, so the app can still reach
+    the error message that explains which file to generate.
+    """
+    parts = []
+    for path in paths:
+        try:
+            info = path.stat()
+            parts.append(f"{path.name}:{info.st_size}:{info.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{path.name}:missing")
+    return "|".join(parts)
+
+
+# Recomputed on every rerun, because Streamlit re-executes this file top to
+# bottom each time. Seven stat() calls.
+VERSION = fingerprint(*MODEL_INPUTS)
+LIVE_VERSION = f"{VERSION}|{fingerprint(LIVE_SOURCE)}"
+
+
 @st.cache_resource(show_spinner="Loading map data...")
-def engine():
+def _engine(version):
     """The model module, with its KD-trees and model card already warm.
 
     cache_resource, not cache_data: this holds live scipy KD-trees and a loaded
@@ -240,16 +301,31 @@ def engine():
     return mod
 
 
+# The cached functions keep their private names and the callers keep theirs:
+# the version is threaded in here, once per function, rather than at the
+# thirty-odd call sites.
+def engine():
+    return _engine(VERSION)
+
+
 @st.cache_data(show_spinner=False)
-def panel():
+def _panel(version):
     mod = engine()
     wide, feat, _ = mod.load()
     return wide, feat.reset_index()[["station_id", "site", "lat", "lon"]]
 
 
+def panel():
+    return _panel(VERSION)
+
+
 @st.cache_data(show_spinner=False)
-def model_card():
+def _model_card(version):
     return json.loads(engine().CARD_PATH.read_text(encoding="utf-8"))
+
+
+def model_card():
+    return _model_card(VERSION)
 
 
 def cloud_secret(name):
@@ -268,7 +344,7 @@ def cloud_secret(name):
 
 
 @st.cache_data(ttl=LIVE_TTL, show_spinner="Fetching current readings...")
-def live_snapshot():
+def _live_snapshot(version):
     """Current CPCB readings, refetched at most every LIVE_TTL seconds.
 
     data/live.py tries data.gov.in first and WAQI second, so both credentials
@@ -285,18 +361,28 @@ def live_snapshot():
         token=cloud_secret("WAQI_TOKEN")))
 
 
+def live_snapshot():
+    # Keyed on data/live.py as well: the TTL would clear a stale reading
+    # eventually, but not a reading fetched by superseded code.
+    return _live_snapshot(LIVE_VERSION)
+
+
 def _unpack(s):
     return s.lats, s.lons, s.values, s.sigma, s.mask, s.mask_kind, s.meta
 
 
 @st.cache_data(show_spinner=False)
-def surface(ts_iso, resolution):
+def _surface(ts_iso, resolution, version):
     return _unpack(engine().predict_surface(pd.Timestamp(ts_iso),
                                             grid_resolution=resolution))
 
 
+def surface(ts_iso, resolution):
+    return _surface(ts_iso, resolution, VERSION)
+
+
 @st.cache_data(show_spinner=False)
-def surface_from(items, resolution, ts_iso):
+def _surface_from(items, resolution, ts_iso, version):
     """Surface built from an explicit set of readings (the live path).
 
     `items` is a tuple of (station_id, value) pairs rather than a Series so the
@@ -305,6 +391,10 @@ def surface_from(items, resolution, ts_iso):
     return _unpack(engine().predict_surface(
         pd.Timestamp(ts_iso), grid_resolution=resolution,
         readings=pd.Series(dict(items), dtype=float)))
+
+
+def surface_from(items, resolution, ts_iso):
+    return _surface_from(items, resolution, ts_iso, VERSION)
 
 
 def cell_polygons(lats, lons):
@@ -351,7 +441,7 @@ def contributions(lat, lon, readings, stations, power, top_n=5):
 
 
 @st.cache_data(show_spinner=False)
-def time_axes():
+def _time_axes(version):
     """Local-time labels for every hour in the panel, plus the citywide mean."""
     wide, _ = panel()
     ist = wide.index.tz_convert(TZ)
@@ -360,8 +450,12 @@ def time_axes():
                           "dow": ist.dayofweek}, index=range(len(wide))), city)
 
 
+def time_axes():
+    return _time_axes(VERSION)
+
+
 @st.cache_data(show_spinner=False)
-def cell_history(lat, lon, power):
+def _cell_history(lat, lon, power, version):
     """The full interpolated history for one cell, all 12k hours.
 
     No sampling and nothing precomputed: a cell's distances to the monitors are
@@ -380,10 +474,18 @@ def cell_history(lat, lon, power):
     return np.where(den > 0, num / np.maximum(den, 1e-12), np.nan)
 
 
+def cell_history(lat, lon, power):
+    return _cell_history(lat, lon, power, VERSION)
+
+
 @st.cache_data(show_spinner=False)
-def monitor_history(station_id):
+def _monitor_history(station_id, version):
     wide, _ = panel()
     return wide[station_id].to_numpy(dtype=float)
+
+
+def monitor_history(station_id):
+    return _monitor_history(station_id, VERSION)
 
 
 def diurnal(values, hours):
