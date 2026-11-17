@@ -662,15 +662,20 @@ else:
 # ---------------------------------------------------------------- map
 map_layers = []
 if located is not None and located["state"] == "inside":
-    here = pd.DataFrame([{"lat": located["lat"], "lon": located["lon"],
-                          "title": "Your location", "line2": "",
-                          "line3": "", "line4": ""}])
-    map_layers.append(
-        pdk.Layer("ScatterplotLayer", here, id="here",
-                  get_position=["lon", "lat"], get_fill_color=[255, 255, 255],
-                  get_line_color=[11, 11, 11], line_width_min_pixels=3,
-                  stroked=True, radius_min_pixels=8, radius_max_pixels=11,
-                  get_radius=250, pickable=False))
+    # The square, not a point. A dot would draw the eye to a position the app
+    # does not have: the coordinates behind it are rounded to about a
+    # kilometre, and what is actually known is which cell they land in. The
+    # outline claims exactly that much and no more.
+    here = pd.DataFrame([{"polygon": cells["polygon"].iloc[located["idx"]]}])
+    # Two rings, the pale one underneath: a single dark outline disappears
+    # against the darkest steps of either ramp, and a single white one against
+    # the palest. Not pickable, so the cell's own tooltip still comes through.
+    for colour, width in (([255, 255, 255], 6), ([11, 11, 11], 2)):
+        map_layers.append(
+            pdk.Layer("PolygonLayer", here, id=f"here_{width}",
+                      get_polygon="polygon", filled=False, stroked=True,
+                      get_line_color=colour, line_width_min_pixels=width,
+                      pickable=False))
 
 deck = pdk.Deck(
     layers=[
