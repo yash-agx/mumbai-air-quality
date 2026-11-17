@@ -134,8 +134,9 @@ C_CITY = "#8c8a84"
 FEATHER = 0.10
 GRID_DEFAULT = 25
 
-# Session keys for the location feature. Coordinates stay in session memory,
-# but they do reach the server, because the interpolation runs there.
+# Session keys for the location feature. Coordinates are rounded to ~1 km as
+# soon as the browser reports them and stay in session memory, but they do
+# reach the server, because the interpolation runs there.
 GEO_KEY = "geo_position"
 LOCATE_FLAG = "locate_requested"
 
@@ -420,6 +421,8 @@ if st.session_state.get(LOCATE_FLAG):
 elif st.sidebar.button("Use my location", width="stretch"):
     st.session_state[LOCATE_FLAG] = True
     st.rerun()
+st.sidebar.caption("Your location is only used to find your area on the map "
+                   "and is never saved.")
 
 # ---------------------------------------------------------------- location
 # Asked for only when the button is pressed, and a denial arrives as data.
@@ -436,9 +439,13 @@ if st.session_state.get(LOCATE_FLAG):
                "message": str(err.get("message") or "")}
     elif isinstance(pos, dict) and pos.get("coords"):
         c = pos["coords"]
-        geo = {"state": "ok", "lat": float(c["latitude"]),
-               "lon": float(c["longitude"]),
-               "accuracy_m": float(c.get("accuracy") or 0)}
+        # Rounded here, at the only point the browser's reading is read, so the
+        # exact position never exists further in. Two decimals is ~1 km, finer
+        # than the grid cell this picks and all the app needs. The browser's
+        # own accuracy figure is dropped with it: it describes a precision no
+        # longer held, so reporting it would overstate what we know.
+        geo = {"state": "ok", "lat": round(float(c["latitude"]), 2),
+               "lon": round(float(c["longitude"]), 2)}
     else:
         geo = {"state": "unavailable", "message": "no position returned"}
 
@@ -567,8 +574,7 @@ if geo is not None:
         else:
             located = {"state": "inside",
                        "idx": cell_index(geo["lat"], geo["lon"], lats, lons),
-                       "lat": geo["lat"], "lon": geo["lon"],
-                       "accuracy_m": geo["accuracy_m"]}
+                       "lat": geo["lat"], "lon": geo["lon"]}
     else:
         located = dict(geo)
 
@@ -809,17 +815,16 @@ if located is not None:
             f"is no estimate for where you are - a number here would be made "
             f"up rather than interpolated.")
     else:
-        acc = located.get("accuracy_m") or 0
         cell_lat = float(lats[located["idx"] // len(lons)])
         cell_lon = float(lons[located["idx"] % len(lons)])
         cell_estimate(located["idx"], cell_lat, cell_lon)
         st.caption(
-            f"Matched to the {meta['cell_km']:.1f} km square containing your "
-            f"position"
-            + (f", located to about {acc:.0f} m" if acc else "") + ". Your "
-            f"coordinates are used to pick that square and nothing else: they "
-            f"are not saved, logged, or put in the page address, and they are "
-            f"gone when you close the tab. They do reach this app's server, "
+            f"Matched to a {meta['cell_km']:.1f} km square near you. Your "
+            f"coordinates are rounded to about a kilometre the moment your "
+            f"browser reports them, and the rounded point is all this app "
+            f"works with - enough to pick a square and nothing else. It is "
+            f"not saved, logged, or put in the page address, and it is gone "
+            f"when you close the tab. It does reach this app's server, "
             f"because the estimate is computed there.")
     st.divider()
 
