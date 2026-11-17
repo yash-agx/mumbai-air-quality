@@ -52,6 +52,18 @@ def live_mod():
     return _load("aq_live", "data/live.py")
 
 
+@pytest.fixture(scope="session")
+def script_module():
+    """Factory for the numbered analysis scripts, loaded by filename.
+
+    Their names start with a digit, so they cannot be imported; and they are
+    scripts, so loading one runs its imports and constants but never main().
+    """
+    def load(filename, name):
+        return _load(f"aq_{name}", f"scripts/{filename}")
+    return load
+
+
 # --------------------------------------------------------------------------
 # Raw-panel builder, shaped like what data/fetch.py writes.
 # --------------------------------------------------------------------------

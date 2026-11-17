@@ -124,6 +124,89 @@ If each site has its own daily rhythm, the obvious next question is whether the 
 
 **One control needed chasing, and it matters.** The tests assume diurnal shape is not itself spatially autocorrelated; if it were, a feature that is spatially structured could inherit geography's significance. A Mantel test on whether shape similarity decays with separation gives **opposite answers on the two time windows**. On the full 18-month record it is flat (r = +0.053, p = 0.518); on the common window it decays clearly (r = −0.215, p = 0.0009). Same monitors, same statistic, same code. The decay is confined to that one span: the same calendar months a year earlier give r = −0.046 (p = 0.59) on the same monitors at the same length, and every seasonal block in the record is flat, so the flat full-record result is the better-supported one, and it is the version consistent with the near-flat variogram above. Two things stop that being a clean close: the window's decay survives every internal check applied to it, and nothing identifies what was physically different about Mar–Aug 2026, so the four p-values above are still treated as possibly anticonservative.
 
+## Follow-ups from public feedback
+
+Four questions came back from a public post. All four were **pre-registered before any of them was run** — hypothesis, statistic, predicted direction, decision rule, and how many independent monitors each really rests on — in [`reports/preregistration_2026-11.md`](reports/preregistration_2026-11.md), committed on its own so the commit order is checkable. Everything below is reported as it came out, nulls included.
+
+The unit is the cross-validation group throughout: **35 units, not 39 monitors**. At that n, a permutation test reaches 80% power only near |ρ| = 0.48, and the coastal contrast rests on 4 units within 2 km of the sea against 9 beyond 8 km, where even a 1.5 SD separation is detected barely two times in three. Read every null below as "no effect large enough for this network to see".
+
+### 1. Sea breeze and land breeze: not supported
+
+The idea: a daytime sea breeze pushes pollution inland and a night-time land breeze pushes it back over the coast, so coastal monitors should peak at night and inland ones in the afternoon.
+
+**Peak hour against distance to the coast is null** — circular–linear R = 0.363, p = 0.106, n = 35. That number is not new evidence: peak and trough are one statistic twelve hours apart, so this is arithmetically the same test as `dist_coast_m` × trough hour in the table above, which was pre-specified and null then too. A secondary coastal-vs-inland comparison *is* significant (Mann–Whitney p = 0.020) but **in the opposite direction to the hypothesis** — the coastal units average an afternoon peak and the inland ones early morning — and it does not survive the full record (p = 0.711). The inland peak hours are scattered (concentration R̄ = 0.59, spanning 01:00 to 21:00), so their circular mean is not describing a common rhythm.
+
+**Wind brings new information, and it does not support the hypothesis either.** Hourly 10 m wind for the same period came from the [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) (ERA5 reanalysis, free for non-commercial use). Hours were classified onshore (wind from 225°–315°, off the sea) or offshore (45°–135°, off the land), with calm hours below 1 m/s dropped.
+
+In the common window, **the land breeze is essentially absent: 56 offshore hours out of 3,901 (1.4%)**, against 2,672 onshore. The window is March–August, when the monsoon flow is relentlessly westerly. Per the pre-registration, that count *is* the result for the primary window — there is no land breeze in it to test against. On the full record the dry season supplies 1,014 offshore hours (October–December alone contribute 697), and the test is null: **ρ = −0.235, p = 0.178, n = 34**. The sign is the predicted one; the effect is not resolvable at this n.
+
+One result worth stating because it looks like a finding and is not. Every monitor, coastal and inland alike, reads about **+1 SD higher during offshore hours** — but offshore hours pile into October–December, which is also Mumbai's dirty season. An exploratory check (not pre-registered) that residualises within month *and* hour collapses the excess to **+0.08 SD**. The offshore signal was winter, not wind.
+
+**Powai is the case the breeze story does not fit**, and it is the reason it was named in advance. It sits 5.8 km inland and peaks at 9 am — the breeze account predicts an afternoon peak there. It is also **1,083 m from the nearest major road, the furthest of all 39 monitors**, so the obvious alternative — a morning traffic peak — is the one explanation its own surroundings make least likely. Its offshore-minus-onshore difference is +0.94 SD, i.e. ordinary. This is one monitor; nothing about it is a test.
+
+### 2. Do low-baseline monitors swing harder? Null
+
+The hypothesis is that a monitor with a lower average PM2.5 shows a larger *percentage* day–night swing. The trap is that percentage swing is (max − min) / mean, so the baseline sits in the denominator: noise in the mean alone manufactures a negative correlation. The pre-registered primary is therefore a **split-half** — mean from odd days, percentage swing from even days — so the two statistics carry independent noise.
+
+**Null: ρ = −0.306, p = 0.075 on the common window, and ρ = −0.094, p = 0.591 on the full record.** The direction is the predicted one and the window result is close to the line, but at n = 35 a true ρ of 0.3 is missed about two times in three, so this neither supports nor excludes the idea — it is exactly the size of effect this network cannot resolve.
+
+Two diagnostics, reported as diagnostics and not promoted: the naive same-data version is *weaker* (ρ = −0.257, p = 0.138), so the artefact did not dominate here; and **absolute** swing in µg/m³ rises with the mean (ρ = +0.443, p = 0.008 on the full record), which is a different and much less interesting claim — dirtier places swing more in absolute terms.
+
+### 3. Every curve is one instrument at one spot
+
+A monitor is not a neighbourhood. The clearest case in this network: **two monitors are both labelled "Malad West"** — one 31 m from a major road, the other 546 m away — and the diurnal chart's "Malad West" curve is the first of them, not the area. Distance to a major road across the 39 monitors ranges from 4 m to 1,083 m (median 109 m). Treat every area label in this project as shorthand for the instrument.
+
+<!-- generated by scripts/09_monitor_table.py -->
+
+39 monitors, 35 independent units (monitors under ~1 km apart share a unit).
+
+| Monitor | Agency | Lat, lon | Nearest major road | Coast | Hours |
+|---|---|---|---|---|---|
+| Bandra Kurla Complex, Mumbai † | IITM | 19.063, 72.846 | 27 m | 1.8 km | 8,327 |
+| Bandra Kurla Complex, Mumbai | MPCB | 19.066, 72.862 | 56 m | 3.2 km | 11,074 |
+| Bhayandar West, Mira-Bhayandar | MPCB | 19.296, 72.841 | 31 m | 2.1 km | 10,806 |
+| Borivali East, Mumbai † | MPCB | 19.227, 72.864 | 101 m | 7.9 km | 8,575 |
+| Borivali East, Mumbai † | IITM | 19.232, 72.869 | 571 m | 8.6 km | 11,773 |
+| Byculla, Mumbai | BMC | 18.977, 72.838 | 361 m | 1.2 km | 11,128 |
+| CBD Belapur, Belapur | MPCB | 19.024, 73.041 | 25 m | 2.5 km | 11,456 |
+| Chakala-Andheri East, Mumbai | IITM | 19.111, 72.861 | 50 m | 3.9 km | 11,203 |
+| Chembur, Mumbai | MPCB | 19.036, 72.895 | 24 m | 3.3 km | 11,145 |
+| Chhatrapati Shivaji Intl. Airport (T2), Mumbai | MPCB | 19.101, 72.875 | 14 m | 5.1 km | 9,026 |
+| Chinchpada, Ambernath | MPCB | 19.216, 73.200 | 932 m | 25.3 km | 3,296 |
+| Deonar, Mumbai | IITM | 19.049, 72.923 | 267 m | 4.2 km | 10,115 |
+| Ghatkopar, Mumbai | BMC | 19.084, 72.921 | 11 m | 4.1 km | 11,212 |
+| Gokul Nagar, Bhiwandi | MPCB | 19.309, 73.057 | 285 m | 22.3 km | 11,640 |
+| Kalu Nagar, Dombivli | MPCB | 19.227, 73.079 | 115 m | 15.6 km | 3,690 |
+| Kandivali West, Mumbai | BMC | 19.216, 72.832 | 53 m | 4.2 km | 9,892 |
+| Kasarvadavali, Thane | MPCB | 19.268, 72.972 | 265 m | 15.7 km | 11,661 |
+| Khadakpada, Kalyan | MPCB | 19.253, 73.142 | 287 m | 22.4 km | 8,075 |
+| Kherwadi_Bandra East, Mumbai † | MPCB | 19.063, 72.846 | 81 m | 1.8 km | 11,678 |
+| Khindipada-Bhandup West, Mumbai | IITM | 19.164, 72.928 | 955 m | 6.1 km | 5,483 |
+| Kopripada-Vashi, Navi Mumbai | MPCB | 19.090, 73.014 | 112 m | 3.0 km | 11,362 |
+| Kurla, Mumbai | MPCB | 19.086, 72.889 | 156 m | 6.6 km | 9,646 |
+| Mahape, Navi Mumbai | MPCB | 19.114, 73.009 | 6 m | 3.2 km | 10,519 |
+| Malad West, Mumbai | IITM | 19.197, 72.822 | 31 m | 2.7 km | 11,724 |
+| Mindspace-Malad West, Mumbai | MPCB | 19.188, 72.830 | 546 m | 3.6 km | 11,271 |
+| Mulund West, Mumbai | MPCB | 19.175, 72.942 | 10 m | 6.2 km | 9,557 |
+| Pimpleshwar Mandir, Thane | MPCB | 19.192, 72.959 | 341 m | 7.4 km | 4,468 |
+| Powai, Mumbai | MPCB | 19.137, 72.915 | 1,083 m | 5.8 km | 8,792 |
+| Sanpada, Navi Mumbai | MPCB | 19.058, 73.015 | 109 m | 2.1 km | 11,120 |
+| Sector-2E Kalamboli, Navi Mumbai | MPCB | 19.026, 73.103 | 45 m | 7.9 km | 10,426 |
+| Sewri, Mumbai | BMC | 19.000, 72.857 | 129 m | 0.4 km | 8,124 |
+| Shivaji Nagar, Mumbai | BMC | 19.060, 72.923 | 85 m | 4.1 km | 11,018 |
+| Siddharth Nagar-Worli, Mumbai † | IITM | 19.000, 72.814 | 203 m | 0.4 km | 10,884 |
+| Sidhi Vinayak Nagar, Ulhasnagar † | MPCB | 19.236, 73.159 | 469 m | 22.6 km | 11,779 |
+| Sion, Mumbai | MPCB | 19.047, 72.875 | 361 m | 3.8 km | 8,971 |
+| Tondare-Taloja, Navi Mumbai | MPCB | 19.063, 73.121 | 4 m | 11.5 km | 11,071 |
+| Upvan Fort, Thane | MPCB | 19.222, 72.958 | 14 m | 10.7 km | 11,593 |
+| Vithalwadi, Ulhasnagar † | MPCB | 19.231, 73.155 | 93 m | 22.0 km | 3,676 |
+| Worli, Mumbai † | MPCB | 18.994, 72.813 | 113 m | 0.0 km | 8,875 |
+
+† 8 monitors in 4 near-coincident pairs, held out together in cross-validation and counted once in every test.
+
+Distance to a major road ranges 4-1,083 m (median 109 m); to the coast 0.0-25.3 km.
+
+
 ## Limitations
 
 **Not all monitors report.** At the last check the live CPCB feed carried 17 of the 39 monitors. The app states how many are reporting and falls back to the most recent stored hour when the feed is unreachable.
@@ -193,7 +276,15 @@ data/clean.py              cleaning, artefact screen, quality report
 data/live.py               live CPCB feed: data.gov.in, WAQI fallback
 scripts/01_check_api.py    API reconnaissance
 scripts/02_features.py     OSM land-use features for any lat/lon
+scripts/03_diurnal_landuse.py  does land use explain diurnal shape? (null)
+scripts/04_mantel_window.py    chasing the Mantel control disagreement
+scripts/05_diurnal_chart.py    the standalone peak-hour chart
+scripts/06_breeze.py       sea/land breeze, with Open-Meteo wind
+scripts/07_baseline_swing.py   do low-baseline monitors swing harder?
+scripts/08_timeblock_cv.py     cross-validation holding out whole months
+scripts/09_monitor_table.py    the monitor table in this README
 model/interpolate.py       IDW / kriging / trees, spatial CV, predict_surface
+reports/preregistration_2026-11.md  what the last four tests promised to do
 ```
 
 ## Notes
