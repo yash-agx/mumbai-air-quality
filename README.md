@@ -224,6 +224,34 @@ The gap is model RMSE minus the city-average baseline's RMSE in µg/m³, average
 
 **The honest headline is how small the gaps are in the first place.** IDW beats the city-wide average by 0.158 µg/m³ of RMSE — under 1% of the 21.4 µg/m³ baseline — and the tree models never beat it at all. That is the same conclusion the spatial CV reached and the reason the app ships IDW alone: on hourly *level*, there is very little spatial structure here for any method to exploit, and holding out time does not change that verdict either way.
 
+### 5. Do the models beat the baseline during extreme episodes? No
+
+The models barely clear the city-average baseline overall. The obvious hope is that the average hides something: maybe a distance-weighted estimate earns its keep during a Diwali night or a December inversion, when a plume sits over one side of the city and a single city-wide number cannot represent it. [Pre-registered](reports/preregistration_2026-11b_episodes.md) before running, with the episode definitions, the predicted direction and the power arithmetic fixed in advance.
+
+Held-out predictions come from the same leave-one-`cv_group`-out CV as the shipped validation, saved per station-hour; the episode subsets are taken afterwards, so nothing about them touched the training. **The unit of analysis is the episode, not the hour** — 123 top-1% hours arrive in 46 contiguous runs, and one weather state covers the whole city for a day at a time — so every interval is a cluster bootstrap over whole episodes.
+
+Gap = model RMSE − baseline RMSE in µg/m³; negative means the model wins.
+
+| subset | episodes | baseline RMSE | IDW gap | 95% CI | verdict |
+|---|---:|---:|---:|---|---|
+| all hours | — | 21.2 | −0.107 | — | reference |
+| top 1% (≥ 85 µg/m³) | 46 | 93.5 | −0.362 | [−1.27, +0.41] | null |
+| top 5% (≥ 70 µg/m³) | 91 | 65.7 | −0.035 | [−0.36, +0.25] | null |
+| Diwali 2025 nights | **1** | 92.1 | −1.604 | — | n = 1, no test |
+| winter spells, Dec–Jan | 6 | 35.3 | +0.010 | [−0.15, +0.14] | null |
+
+(The all-hours reference is −0.107 µg/m³ over all 12,216 hours. The −0.158 quoted in section 4 is the same quantity measured only on the four months sampled there, which is why the two differ; both are under 1% of the baseline.)
+
+**Every interval includes zero.** The top-1% point estimate is about three times the all-hours advantage (−0.362 against −0.107), which is the direction the hypothesis predicts, but the difference between them is −0.256 with an interval of [−1.16, +0.51] — nowhere near resolvable. Clustering by calendar month instead of by run, the more conservative unit, leaves it null too (p = 0.74). In the top 5% and in the winter spells there is no advantage at all: IDW's gap is −0.035 and +0.010, both straddling zero.
+
+**The scale is the thing worth keeping.** During top-1% hours every method, baseline included, is wrong by about 93 µg/m³ RMSE. Arguing over a 0.4 µg/m³ difference there is arguing about 0.4% of an error that is already enormous. When Mumbai's air goes bad, this network's spatial information does not tell you much that the city-wide average does not.
+
+**Diwali is the one place something shows, and it is a single night.** The window of 18–22 October 2025, 18:00–02:00, averaged 98 µg/m³ against 31 for the record, with the night of the 20th averaging 166 and peaking at 275 — the highest citywide hour in the eighteen months. IDW's gap there is −1.60 µg/m³, the largest anywhere in this table. It is also **n = 1**: one festival, one city, one year, and no p-value was computed for it by design. It is a hypothesis for a future Diwali, not a result.
+
+**The tree models get significantly worse during episodes**, which is the one clearly significant finding here: `trees+idw` is +0.93 µg/m³ behind the baseline in the top 5% (p = 0.003) and +2.16 behind during winter spells (p = 0.031). They were already the weakest row overall, and episodes are exactly where they degrade most.
+
+**What the nulls can and cannot rule out.** The six winter spells all come from one winter (December 2025–January 2026), so they are six correlated samples of one season, not six independent winters. And at four episodes — the stricter ≥ 60 µg/m³ winter definition — a signed-rank test cannot return p < 0.05 *at all*, since its smallest possible two-sided p is 0.125; that definition is reported with an interval and no p-value for exactly that reason. At 46 episodes the test would catch a 0.5 SD per-episode effect nine times in ten, so a large advantage during the worst hours is excluded; a small one is not.
+
 ## Limitations
 
 **Not all monitors report.** At the last check the live CPCB feed carried 17 of the 39 monitors. The app states how many are reporting and falls back to the most recent stored hour when the feed is unreachable.
@@ -300,8 +328,10 @@ scripts/06_breeze.py       sea/land breeze, with Open-Meteo wind
 scripts/07_baseline_swing.py   do low-baseline monitors swing harder?
 scripts/08_timeblock_cv.py     cross-validation holding out whole months
 scripts/09_monitor_table.py    the monitor table in this README
+scripts/10_episodes.py     do the models beat the baseline when air is worst?
 model/interpolate.py       IDW / kriging / trees, spatial CV, predict_surface
-reports/preregistration_2026-11.md  what the last four tests promised to do
+reports/preregistration_2026-11.md   what the breeze round promised to do
+reports/preregistration_2026-11b_episodes.md   and the episode round
 ```
 
 ## Notes
