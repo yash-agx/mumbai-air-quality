@@ -134,9 +134,9 @@ C_CITY = "#8c8a84"
 FEATHER = 0.10
 GRID_DEFAULT = 25
 
-# Session keys for the location feature. Coordinates are rounded to ~1 km as
-# soon as the browser reports them and stay in session memory, but they do
-# reach the server, because the interpolation runs there.
+# Session keys for the location feature. The browser rounds the coordinates to
+# ~1 km before posting them, so the exact position never reaches the server.
+# The rounded point does, because the interpolation runs there.
 GEO_KEY = "geo_position"
 LOCATE_FLAG = "locate_requested"
 
@@ -426,11 +426,28 @@ st.sidebar.caption("Your location is only used to find your area on the map "
 
 # ---------------------------------------------------------------- location
 # Asked for only when the button is pressed, and a denial arrives as data.
+#
+# The rounding happens in the browser, in this expression, not in Python: the
+# exact reading is rounded to two decimals (~1 km, finer than the grid cell it
+# picks) in the page that produced it, and only the rounded point is ever
+# posted back to the server. The browser's own accuracy figure is dropped with
+# it - it describes a precision nobody here holds any more.
+#
+# Why an expression instead of the library's get_geolocation(): that helper
+# evaluates getLocation() and returns its whole position object, exact
+# coordinates included. Wrapping it is what keeps the full-precision values
+# inside the browser. The component evaluates this with eval() and resolves a
+# promise if it gets one, so a .then chain is a valid expression here. The
+# error shape is passed through untouched.
+GEO_JS = """getLocation().then(p => (p && p.coords) ? {coords: {
+    latitude: Number(p.coords.latitude.toFixed(2)),
+    longitude: Number(p.coords.longitude.toFixed(2))}} : p)"""
+
 geo = None
 if st.session_state.get(LOCATE_FLAG):
-    from streamlit_js_eval import get_geolocation
+    from streamlit_js_eval import streamlit_js_eval
 
-    pos = get_geolocation(component_key=GEO_KEY)
+    pos = streamlit_js_eval(js_expressions=GEO_JS, key=GEO_KEY)
     if pos is None:
         geo = {"state": "waiting"}
     elif isinstance(pos, dict) and pos.get("error"):
@@ -438,14 +455,10 @@ if st.session_state.get(LOCATE_FLAG):
         geo = {"state": "denied" if err.get("code") == 1 else "unavailable",
                "message": str(err.get("message") or "")}
     elif isinstance(pos, dict) and pos.get("coords"):
+        # Already rounded by the time it arrives; nothing to do but read it.
         c = pos["coords"]
-        # Rounded here, at the only point the browser's reading is read, so the
-        # exact position never exists further in. Two decimals is ~1 km, finer
-        # than the grid cell this picks and all the app needs. The browser's
-        # own accuracy figure is dropped with it: it describes a precision no
-        # longer held, so reporting it would overstate what we know.
-        geo = {"state": "ok", "lat": round(float(c["latitude"]), 2),
-               "lon": round(float(c["longitude"]), 2)}
+        geo = {"state": "ok", "lat": float(c["latitude"]),
+               "lon": float(c["longitude"])}
     else:
         geo = {"state": "unavailable", "message": "no position returned"}
 
@@ -820,12 +833,12 @@ if located is not None:
         cell_estimate(located["idx"], cell_lat, cell_lon)
         st.caption(
             f"Matched to a {meta['cell_km']:.1f} km square near you. Your "
-            f"coordinates are rounded to about a kilometre the moment your "
-            f"browser reports them, and the rounded point is all this app "
-            f"works with - enough to pick a square and nothing else. It is "
-            f"not saved, logged, or put in the page address, and it is gone "
-            f"when you close the tab. It does reach this app's server, "
-            f"because the estimate is computed there.")
+            f"browser rounds your coordinates to about a kilometre before "
+            f"sending them, so your exact position never leaves your device. "
+            f"The rounded point reaches this app's server, because the "
+            f"estimate is computed there, and it is used to pick a square and "
+            f"nothing else: it is not saved, logged, or put in the page "
+            f"address, and it is gone when you close the tab.")
     st.divider()
 
 if picked is None:
