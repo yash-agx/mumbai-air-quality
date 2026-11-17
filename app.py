@@ -112,20 +112,18 @@ REASON_COLORS = {1: [27, 175, 122], 2: [235, 104, 52], 3: [140, 138, 132]}
 # error does not track distance (r = -0.02). These cells are unlike anywhere we
 # measure.
 #
-# Group 1 is deliberately not called "open land, water or forest" any more. It
-# fires when any one density measurement falls below the band, and the band
-# starts at the least built-up of 39 monitors that all stand in dense Mumbai -
-# so ordinary low-rise neighbourhoods land in it alongside the sea and the
-# national park. A square is described by its own measurements instead, via
-# OUT_OF_BAND_WORDS below; these labels only group the legend.
-REASON_SHORT = {1: "Less built up than any monitor's surroundings",
+# Group 1 earns its name: a square joins it only when it is short of both
+# buildings and road, so a built-up neighbourhood cannot land there on one
+# measurement alone. A square is still described by its own measurements rather
+# than by its group, via OUT_OF_BAND_WORDS below; these labels group the legend.
+REASON_SHORT = {1: "Open land, water or forest",
                 2: "Away from the roads and industry our monitors sit near",
                 3: "Unlike anywhere we have a monitor"}
 REASON_LONG = {
-    1: "Every monitor sits in built-up Mumbai, so the trained range starts "
-       "high: this square has fewer buildings or less road around it than any "
-       "of them. Much of that group is sea, forest and open ground - but not "
-       "all of it, and a built-up neighbourhood can fall below the band too.",
+    1: "Every monitor sits in built-up Mumbai. This square has both fewer "
+       "mapped buildings and less road around it than any of them - it is sea, "
+       "forest or open ground - so there is nothing comparable to estimate "
+       "from.",
     2: "This is inhabited ground, but it sits further from a main road or an "
        "industrial area than any of our monitors do. Monitors cluster near "
        "traffic and industry, so quieter neighbourhoods like this one have no "
@@ -775,11 +773,10 @@ if explain:
              for k, n in ((1, "_empty"), (2, "_remote"), (3, "_other")) if counts[n]]
     st.markdown(" &nbsp;&nbsp; ".join(parts)
                 + "<br/><span style='color:#52514e'>Pale squares are ones we can "
-                  "estimate. The green group is mostly sea, forest and open "
-                  "ground, but a built-up neighbourhood with fewer buildings "
-                  "than any monitor's surroundings falls in it too - click a "
-                  "square to see which measurement put it there.</span>",
-                unsafe_allow_html=True)
+                  "estimate. The orange group is the one worth knowing about: "
+                  "built-up neighbourhoods that simply have no monitor like "
+                  "them. Click any grey square to see which measurement put it "
+                  "outside the range.</span>", unsafe_allow_html=True)
 elif relative:
     bar = "".join(f'<span style="display:inline-block;width:19px;height:12px;'
                   f'background:{c}"></span>' for c in DIV_LOW + [DIV_MID] + DIV_HIGH)

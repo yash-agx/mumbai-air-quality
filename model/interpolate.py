@@ -456,13 +456,17 @@ GRID_CELLS = 25
 # point clouds.
 GRID_RESOLUTIONS = (15, 25, 40, 60)
 
-# Why a cell is masked. Emptiness is sea and forest, correctly refused.
-# Remoteness is inhabited ground farther from a road or an industrial estate
-# than any monitor sits, which is the caveat worth knowing about.
+# Why a cell is masked. Emptiness is sea and forest, correctly refused: it
+# takes too few buildings and too little road together, so a built-up place
+# cannot land there on one measurement alone. Remoteness is inhabited ground
+# farther from a road or an industrial estate than any monitor sits, which is
+# the caveat worth knowing about.
 MASK_NONE, MASK_EMPTY, MASK_REMOTE, MASK_OTHER = 0, 1, 2, 3
 
 # Falling below the band on these means "less built than anywhere we measured".
-DENSITY_FEATURES = ("road_density_500m", "road_density_1km", "building_density_500m")
+BUILDING_FEATURE = "building_density_500m"
+ROAD_DENSITY_FEATURES = ("road_density_500m", "road_density_1km")
+DENSITY_FEATURES = ROAD_DENSITY_FEATURES + (BUILDING_FEATURE,)
 # Rising above the band on these means "farther from one than anywhere we measured".
 REMOTENESS_FEATURES = ("dist_major_road_m", "dist_industrial_m")
 
@@ -668,8 +672,9 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
     n = len(feats)
     mask = np.zeros(n, dtype=bool)
     below, above = np.zeros(n, bool), np.zeros(n, bool)
-    empty, remote, reasons = np.zeros(n, bool), np.zeros(n, bool), {}
+    remote, reasons = np.zeros(n, bool), {}
     flags = np.zeros(n, dtype=np.int16)
+    build_below, road_below = np.zeros(n, bool), np.zeros(n, bool)
     for name, b in bounds.items():
         v = feats[name].to_numpy()
         lo, hi = v < b[lo_key], v > b[hi_key]
@@ -681,10 +686,22 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
         # the flags cannot describe a different verdict than `kind` does.
         below_bit, above_bit = BAND_BITS.get(name, (0, 0))
         flags |= (lo * below_bit + hi * above_bit).astype(np.int16)
-        if name in DENSITY_FEATURES:
-            empty |= lo
+        if name == BUILDING_FEATURE:
+            build_below |= lo
+        if name in ROAD_DENSITY_FEATURES:
+            road_below |= lo
         if name in REMOTENESS_FEATURES:
             remote |= hi
+
+    # Both halves of "built" have to be missing before a cell is called empty:
+    # too few buildings AND too little road. Either on its own does not mean
+    # open ground. Every monitor stands in dense built-up Mumbai, so the
+    # building floor sits at 40.7 mapped footprints per km2 within 500 m, and
+    # OSM under-maps dense informal housing - enough that ordinary
+    # neighbourhoods fall under it with their roads fully in range. Those cells
+    # are still masked, as MASK_OTHER; what changes is that the empty group
+    # means what its name says.
+    empty = build_below & road_below
 
     # Emptiness wins where a cell is both: open water far from a road is
     # refused because there is nothing there, not because of the distance.

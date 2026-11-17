@@ -769,26 +769,47 @@ def test_band_flags_name_the_feature_and_the_side(interp_mod, bounds, monkeypatc
         ("dist_major_road_m", "above"), ("building_density_500m", "below")]
 
 
-def test_band_flags_describe_a_built_up_cell_that_kind_calls_empty(
+def test_a_built_up_cell_short_only_of_buildings_is_not_called_empty(
         interp_mod, bounds, monkeypatch):
-    """The case the kind alone gets wrong.
+    """The case that used to come out MASK_EMPTY - "open land, water or forest".
 
-    Buildings and roads are plainly there, but there are fewer buildings than
-    around any monitor, so the kind comes out MASK_EMPTY - "open land, water or
-    forest". The flags name what was actually measured instead, which is the
-    only honest thing to show for a cell like this.
+    A real grid cell, measured: built up, with both road densities comfortably
+    inside the band and every distance in range. Only the mapped building count
+    is below it, and OSM under-maps dense housing as one polygon per block. One
+    density measurement is not enough to call a place open land, so this is
+    masked under a different kind - and the flags name the measurement either
+    way.
     """
     frame = pd.DataFrame([{
-        "dist_major_road_m": 1100.0, "road_density_500m": 12.0,
-        "road_density_1km": 12.0, "dist_coast_m": 4000.0,
-        "dist_industrial_m": 1500.0, "building_density_500m": 27.0,
+        "dist_major_road_m": 81.9, "road_density_500m": 8.44,
+        "road_density_1km": 9.28, "dist_coast_m": 7851.4,
+        "dist_industrial_m": 519.3, "building_density_500m": 26.7,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    _, kind, _, flags = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
-    assert kind[0] == interp_mod.MASK_EMPTY
+    mask, kind, _, flags = interp_mod.extrapolation_mask([19.147], [73.05],
+                                                         bounds)
+    assert mask[0], "still outside the band, so still no estimate"
+    assert kind[0] != interp_mod.MASK_EMPTY
     assert ("building_density_500m", "below") in interp_mod.out_of_band(flags[0])
     # Road density is inside the band: nothing may claim the roads are missing.
     assert ("road_density_500m", "below") not in interp_mod.out_of_band(flags[0])
+
+
+def test_empty_needs_both_too_few_buildings_and_too_little_road(
+        interp_mod, bounds, monkeypatch):
+    """Each density measurement alone is not emptiness; the two together are."""
+    base = {"dist_major_road_m": 300.0, "road_density_500m": 12.0,
+            "road_density_1km": 12.0, "dist_coast_m": 4000.0,
+            "dist_industrial_m": 1500.0, "building_density_500m": 700.0}
+    buildings_only = dict(base, building_density_500m=27.0)
+    road_only = dict(base, road_density_500m=0.0, road_density_1km=0.0)
+    both = dict(base, building_density_500m=27.0, road_density_500m=0.0,
+                road_density_1km=0.0)
+    _stub_osm(interp_mod, monkeypatch,
+              pd.DataFrame([buildings_only, road_only, both]))
+    _, kind, _, _ = interp_mod.extrapolation_mask([19.0] * 3, [72.9] * 3, bounds)
+    assert list(kind) == [interp_mod.MASK_OTHER, interp_mod.MASK_OTHER,
+                          interp_mod.MASK_EMPTY]
 
 
 def test_band_flags_are_empty_for_an_in_range_cell(interp_mod):
