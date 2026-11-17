@@ -646,8 +646,10 @@ def test_extrapolation_mask_passes_a_point_inside_the_band(interp_mod, bounds,
         "dist_industrial_m": 1500.0, "building_density_500m": 700.0,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    mask, kind, reasons = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    mask, kind, reasons, flags = interp_mod.extrapolation_mask([19.0], [72.9],
+                                                             bounds)
     assert not mask[0]
+    assert flags[0] == 0
     assert kind[0] == interp_mod.MASK_NONE
     assert reasons["_below_band"] == 0
     assert reasons["_above_band"] == 0
@@ -662,7 +664,8 @@ def test_extrapolation_mask_calls_open_water_empty(interp_mod, bounds, monkeypat
         "dist_industrial_m": 1500.0, "building_density_500m": 0.0,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    mask, kind, reasons = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    mask, kind, reasons, flags = interp_mod.extrapolation_mask([19.0], [72.9],
+                                                             bounds)
     assert mask[0]
     assert kind[0] == interp_mod.MASK_EMPTY
     assert reasons["road_density_500m"] == 1
@@ -679,7 +682,7 @@ def test_extrapolation_mask_calls_quiet_inhabited_land_remote(interp_mod, bounds
         "dist_industrial_m": 20000.0, "building_density_500m": 700.0,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    mask, kind, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    mask, kind, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
     assert mask[0]
     assert kind[0] == interp_mod.MASK_REMOTE
 
@@ -694,7 +697,7 @@ def test_extrapolation_mask_lets_emptiness_win_over_remoteness(interp_mod, bound
         "dist_industrial_m": 50000.0, "building_density_500m": 0.0,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    _, kind, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    _, kind, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
     assert kind[0] == interp_mod.MASK_EMPTY
 
 
@@ -707,7 +710,7 @@ def test_extrapolation_mask_falls_back_to_other(interp_mod, bounds, monkeypatch)
         "dist_industrial_m": 1500.0, "building_density_500m": 700.0,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    mask, kind, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    mask, kind, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
     assert mask[0]
     assert kind[0] == interp_mod.MASK_OTHER
 
@@ -722,9 +725,9 @@ def test_extrapolation_mask_band_choice_changes_the_verdict(interp_mod, bounds,
         "dist_industrial_m": 1500.0, "building_density_500m": 700.0,
     }])
     _stub_osm(interp_mod, monkeypatch, frame)
-    wide_band, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
-    tight, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds,
-                                                band=("p01", "p99"))
+    wide_band, _, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    tight, _, _, _ = interp_mod.extrapolation_mask([19.0], [72.9], bounds,
+                                                   band=("p01", "p99"))
     assert not wide_band[0]
     assert tight[0]
 
@@ -743,14 +746,60 @@ def test_extrapolation_mask_counts_reasons_per_feature(interp_mod, bounds,
          "dist_industrial_m": 1500.0, "building_density_500m": 700.0},
     ])
     _stub_osm(interp_mod, monkeypatch, frame)
-    mask, kind, reasons = interp_mod.extrapolation_mask([19.0] * 3, [72.9] * 3,
-                                                        bounds)
+    mask, kind, reasons, _ = interp_mod.extrapolation_mask([19.0] * 3,
+                                                           [72.9] * 3, bounds)
     assert list(mask) == [False, True, True]
     assert reasons["_empty"] == 1
     assert reasons["_remote"] == 1
     assert reasons["_other"] == 0
     assert set(reasons) >= set(interp_mod.OSM_FEATURES)
     assert sum(1 for k in kind if k != interp_mod.MASK_NONE) == 2
+
+
+def test_band_flags_name_the_feature_and_the_side(interp_mod, bounds, monkeypatch):
+    """The flags say which measurement fell outside, and which way."""
+    frame = pd.DataFrame([{
+        "dist_major_road_m": 9000.0, "road_density_500m": 15.0,
+        "road_density_1km": 12.0, "dist_coast_m": 4000.0,
+        "dist_industrial_m": 1500.0, "building_density_500m": 40.0,
+    }])
+    _stub_osm(interp_mod, monkeypatch, frame)
+    _, _, _, flags = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    assert interp_mod.out_of_band(flags[0]) == [
+        ("dist_major_road_m", "above"), ("building_density_500m", "below")]
+
+
+def test_band_flags_describe_a_built_up_cell_that_kind_calls_empty(
+        interp_mod, bounds, monkeypatch):
+    """The case the kind alone gets wrong.
+
+    Buildings and roads are plainly there, but there are fewer buildings than
+    around any monitor, so the kind comes out MASK_EMPTY - "open land, water or
+    forest". The flags name what was actually measured instead, which is the
+    only honest thing to show for a cell like this.
+    """
+    frame = pd.DataFrame([{
+        "dist_major_road_m": 1100.0, "road_density_500m": 12.0,
+        "road_density_1km": 12.0, "dist_coast_m": 4000.0,
+        "dist_industrial_m": 1500.0, "building_density_500m": 27.0,
+    }])
+    _stub_osm(interp_mod, monkeypatch, frame)
+    _, kind, _, flags = interp_mod.extrapolation_mask([19.0], [72.9], bounds)
+    assert kind[0] == interp_mod.MASK_EMPTY
+    assert ("building_density_500m", "below") in interp_mod.out_of_band(flags[0])
+    # Road density is inside the band: nothing may claim the roads are missing.
+    assert ("road_density_500m", "below") not in interp_mod.out_of_band(flags[0])
+
+
+def test_band_flags_are_empty_for_an_in_range_cell(interp_mod):
+    assert interp_mod.out_of_band(0) == []
+
+
+def test_band_bits_are_unique_per_feature_and_side(interp_mod):
+    bits = [b for pair in interp_mod.BAND_BITS.values() for b in pair]
+    assert len(set(bits)) == 2 * len(interp_mod.OSM_FEATURES)
+    # int16 is what gets baked, so the top bit must stay clear of the sign bit.
+    assert max(bits) < 2 ** 15
 
 
 def test_mask_kind_codes_are_distinct(interp_mod):

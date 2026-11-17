@@ -130,7 +130,7 @@ If each site has its own daily rhythm, the obvious next question is whether the 
 
 **The monitor network is sited unlike the city it measures.** Monitors sit at roughly 2.7× the building density of typical inhabited ground (median 244.5 vs 90.4 buildings/km²) and 2.4× the road density, and the densest monitor lands at the 98th percentile of inhabited cells. Where the model extrapolates, it therefore mostly extrapolates *downward*, into quieter, greener, lower-traffic ground it has never seen. Any estimate for a calm residential pocket rests on monitors systematically busier than it, and nothing in the cross-validation score speaks to that, because every held-out monitor is itself one of these busy sites. Mumbai's dense neighbourhoods are largely inside the training range; the gap is at the quiet end.
 
-**79.8% of the map is masked.** Grid cells whose land use falls outside the range spanned by all 39 monitors get no estimate. At the default resolution that is 458 cells of open water, forest and empty land (the bounding box is a rectangle over a coastal city, and 37% of cells contain no mapped roads or buildings at all), 28 cells that are inhabited but further from a road or industry than any monitor, and 13 for other reasons. The second group is the one worth knowing about; the app can colour the mask by reason.
+**79.8% of the map is masked.** Grid cells whose land use falls outside the range spanned by all 39 monitors get no estimate. At the default resolution that is 458 cells below the band on a density measurement, 28 that are inhabited but further from a road or industry than any monitor, and 13 for other reasons. The first group is mostly empty ground — the bounding box is a rectangle over a coastal city, and 231 of those 458 cells contain no mapped road or building at all — but it is not only empty ground, and the group label used to say otherwise. Every monitor stands in dense built-up Mumbai, so the band starts at 40.7 mapped building footprints per km² within 500 m: 73 of the 458 have both buildings and roads mapped, and 191 are below the band on buildings while their road density sits inside the monitors' range. OSM under-maps dense informal housing, which pushes genuinely built-up ground below that floor. The app names the measurements behind each masked cell rather than the group, and can colour the mask by group.
 
 **The AQI figures are a PM2.5 sub-index, not the official AQI.** CPCB defines the National Air Quality Index on a rolling 24-hour average, and takes the worst of eight pollutants. data.gov.in publishes that 24-hour average, so a figure from it sits on CPCB's window. The WAQI fallback and the stored history are both hourly, so a figure from either applies CPCB's breakpoints to one hour and moves around more. In all three cases the scale and category names are CPCB's and the number covers PM2.5 alone.
 
@@ -180,7 +180,7 @@ python model/interpolate.py     # cross-validation + model card (~6 min)
 python model/interpolate.py --masks   # bake extrapolation masks for the app
 ```
 
-The masks step is what keeps deployment small: it reduces 41 MB of OSM point clouds to a 2.7 KB file, because the mask answers a question whose answer never changes. The deployed app never loads OSM at all.
+The masks step is what keeps deployment small: it reduces 41 MB of OSM point clouds to a 6.6 KB file, because the mask answers a question whose answer never changes. The deployed app never loads OSM at all.
 
 ## Repository layout
 

@@ -466,6 +466,35 @@ DENSITY_FEATURES = ("road_density_500m", "road_density_1km", "building_density_5
 # Rising above the band on these means "farther from one than anywhere we measured".
 REMOTENESS_FEATURES = ("dist_major_road_m", "dist_industrial_m")
 
+# Which measurements put a cell outside the band, baked per cell alongside
+# `kind`. One bit per feature per side, in OSM_FEATURES order: bit 2i is "below
+# the training minimum", bit 2i+1 is "above the training maximum".
+#
+# `kind` groups a cell by what the combination suggests it is; these record
+# what was actually measured. The two are not interchangeable, and the gap
+# showed up in use: MASK_EMPTY fires when any one density feature is below the
+# band, which in a city where every monitor stands in dense built-up ground
+# also catches ordinary low-rise neighbourhoods. Reported as a kind alone, such
+# a cell gets called open land. Reported by feature, it says the true thing -
+# fewer buildings nearby than around any monitor.
+BAND_BITS = {name: (1 << (2 * i), 1 << (2 * i + 1))
+             for i, name in enumerate(OSM_FEATURES)}
+
+
+def out_of_band(flags):
+    """[(feature, "below"|"above")] for one baked flags value, in feature order.
+
+    Empty when the cell is inside the band on everything, or when the flags
+    come from a mask file baked before they were recorded.
+    """
+    out = []
+    for name, (below, above) in BAND_BITS.items():
+        if int(flags) & below:
+            out.append((name, "below"))
+        if int(flags) & above:
+            out.append((name, "above"))
+    return out
+
 
 class Surface(NamedTuple):
     lats: np.ndarray          # cell-centre latitudes, north-positive (n,)
@@ -500,7 +529,11 @@ def grid_masks():
             "band": tuple(meta["band"]),
             "reasons": meta["reasons"],
             "kind": {int(k.split("_")[1]): z[k] for k in z.files
-                     if k.startswith("kind_")}}
+                     if k.startswith("kind_")},
+            # Absent from files baked before the flags existed; callers treat a
+            # missing resolution as "nothing to name".
+            "flags": {int(k.split("_")[1]): z[k] for k in z.files
+                      if k.startswith("flags_")}}
 
 
 def station_cells(bbox, n):
@@ -516,8 +549,11 @@ def station_cells(bbox, n):
     return np.unique(i * n + j)
 
 
-def clear_station_cells(kind, bbox, n):
+def clear_station_cells(kind, bbox, n, flags=None):
     """Force cells that contain a monitor in-range. Returns (kind, n_cleared).
+
+    `flags`, when given, is zeroed on the same cells: the cell counts as in
+    range, so there is nothing left for it to report as out of band.
 
     The mask exists to flag places with no comparable training data. A cell with
     a monitor standing in it has ground truth by definition, so refusing to
@@ -533,6 +569,8 @@ def clear_station_cells(kind, bbox, n):
     idx = station_cells(bbox, n)
     cleared = int((kind[idx] != MASK_NONE).sum())
     kind[idx] = MASK_NONE
+    if flags is not None:
+        flags[idx] = 0
     return kind, cleared
 
 
@@ -550,9 +588,11 @@ def write_grid_masks(resolutions=GRID_RESOLUTIONS, band=("min", "max")):
     for n in resolutions:
         lats, lons = grid_axes(bbox, n)
         glon, glat = np.meshgrid(lons, lats)
-        _, kind, reasons = extrapolation_mask(glat.ravel(), glon.ravel(), bounds, band)
-        kind, cleared = clear_station_cells(kind, bbox, n)
+        _, kind, reasons, flags = extrapolation_mask(glat.ravel(), glon.ravel(),
+                                                      bounds, band)
+        kind, cleared = clear_station_cells(kind, bbox, n, flags)
         payload[f"kind_{n}"] = kind.reshape(n, n).astype(np.int8)
+        payload[f"flags_{n}"] = flags.reshape(n, n).astype(np.int16)
         # Per-feature counts describe why cells fell outside the band, before
         # the monitor override.
         counts = {k: int(v) for k, v in reasons.items()}
@@ -608,6 +648,10 @@ def haversine_grid_km(lat, lon, slat, slon):
 def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
     """True where any OSM feature falls outside the training range.
 
+    Returns (mask, kind, reasons, flags): the boolean mask, the MASK_* kind per
+    cell, per-feature counts, and the BAND_BITS flags saying which measurements
+    were outside and on which side.
+
     The station network only ever saw built-up Mumbai. A cell in the Arabian Sea
     or inside the national park has no road, no buildings and no analogue in
     training, and nothing in the CV score says what the model does there.
@@ -625,6 +669,7 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
     mask = np.zeros(n, dtype=bool)
     below, above = np.zeros(n, bool), np.zeros(n, bool)
     empty, remote, reasons = np.zeros(n, bool), np.zeros(n, bool), {}
+    flags = np.zeros(n, dtype=np.int16)
     for name, b in bounds.items():
         v = feats[name].to_numpy()
         lo, hi = v < b[lo_key], v > b[hi_key]
@@ -632,6 +677,10 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
         below |= lo
         above |= hi
         mask |= lo | hi
+        # Set in the same pass that decides the mask, from the same lo/hi, so
+        # the flags cannot describe a different verdict than `kind` does.
+        below_bit, above_bit = BAND_BITS.get(name, (0, 0))
+        flags |= (lo * below_bit + hi * above_bit).astype(np.int16)
         if name in DENSITY_FEATURES:
             empty |= lo
         if name in REMOTENESS_FEATURES:
@@ -647,7 +696,7 @@ def extrapolation_mask(lats, lons, bounds, band=("min", "max")):
     reasons["_empty"] = int((kind == MASK_EMPTY).sum())
     reasons["_remote"] = int((kind == MASK_REMOTE).sum())
     reasons["_other"] = int((kind == MASK_OTHER).sum())
-    return mask, kind, reasons
+    return mask, kind, reasons, flags
 
 
 def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
@@ -657,7 +706,8 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
     Returns a Surface: predictions, per-cell sigma, and a mask marking cells
     whose land use falls outside anything the model was trained on. The mask is
     advisory: values are still returned for masked cells so the app can shade
-    rather than hole-punch them.
+    rather than hole-punch them. meta["mask_flags"] carries the BAND_BITS flags
+    per cell, so a caller can name the measurements behind a masked cell.
 
     `readings` overrides the stored panel with a station_id -> ug/m3 Series, so
     the same interpolation can run on a live feed instead of on history. The
@@ -691,11 +741,14 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
         kind = baked["kind"][n].ravel()
         mask = kind != MASK_NONE
         reasons = dict(baked["reasons"][str(n)])
+        baked_flags = baked.get("flags", {}).get(n)
+        flags = (baked_flags.ravel() if baked_flags is not None
+                 else np.zeros(n * n, dtype=np.int16))
     else:
         # Falls through to the OSM layers: a resolution or band nobody baked.
-        mask, kind, reasons = extrapolation_mask(flat_lat, flat_lon,
-                                                 p["bounds"], band)
-        kind, _ = clear_station_cells(kind, bbox, n)
+        mask, kind, reasons, flags = extrapolation_mask(flat_lat, flat_lon,
+                                                        p["bounds"], band)
+        kind, _ = clear_station_cells(kind, bbox, n, flags)
         mask = kind != MASK_NONE
 
     if readings is not None:
@@ -712,7 +765,7 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
                        kind.reshape(n, n),
                        {"timestamp": ts, "n_stations": 0, "cell_km": None,
                         "masked_fraction": float(mask.mean()),
-                        "mask_reasons": reasons,
+                        "mask_reasons": reasons, "mask_flags": flags,
                         "note": "no station reported this hour"})
 
     live = ~np.isnan(row)
@@ -731,7 +784,7 @@ def predict_surface(timestamp, pollutant="pm25", grid_resolution=GRID_CELLS,
         kind.reshape(n, n),
         {"timestamp": ts, "n_stations": int(live.sum()), "idw_power": power,
          "cell_km": round(cell_km, 2), "masked_fraction": float(mask.mean()),
-         "mask_reasons": reasons, "band": list(band),
+         "mask_reasons": reasons, "mask_flags": flags, "band": list(band),
          "cv_rmse": p["card"]["cv"]["rmse"]})
 
 

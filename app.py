@@ -108,15 +108,24 @@ MASK_ALPHA = 70
 # 27.6. Aqua is sub-3:1 on a light surface, so the legend labels both in text.
 REASON_COLORS = {1: [27, 175, 122], 2: [235, 104, 52], 3: [140, 138, 132]}
 
-# Plain-language mask reasons. Not "too far from a monitor": error does not
-# track distance (r = -0.02). These cells are unlike anywhere we measure.
-REASON_SHORT = {1: "Open land, water or forest",
+# Plain-language mask groups, for the legend. Not "too far from a monitor":
+# error does not track distance (r = -0.02). These cells are unlike anywhere we
+# measure.
+#
+# Group 1 is deliberately not called "open land, water or forest" any more. It
+# fires when any one density measurement falls below the band, and the band
+# starts at the least built-up of 39 monitors that all stand in dense Mumbai -
+# so ordinary low-rise neighbourhoods land in it alongside the sea and the
+# national park. A square is described by its own measurements instead, via
+# OUT_OF_BAND_WORDS below; these labels only group the legend.
+REASON_SHORT = {1: "Less built up than any monitor's surroundings",
                 2: "Away from the roads and industry our monitors sit near",
                 3: "Unlike anywhere we have a monitor"}
 REASON_LONG = {
-    1: "Every monitor sits in built-up Mumbai. This cell has fewer roads and "
-       "buildings around it than any of them - it is sea, forest or open "
-       "ground - so there is nothing comparable to estimate from.",
+    1: "Every monitor sits in built-up Mumbai, so the trained range starts "
+       "high: this square has fewer buildings or less road around it than any "
+       "of them. Much of that group is sea, forest and open ground - but not "
+       "all of it, and a built-up neighbourhood can fall below the band too.",
     2: "This is inhabited ground, but it sits further from a main road or an "
        "industrial area than any of our monitors do. Monitors cluster near "
        "traffic and industry, so quieter neighbourhoods like this one have no "
@@ -124,6 +133,41 @@ REASON_LONG = {
     3: "One of the land-use measurements here falls outside the range covered "
        "by all 39 monitors, so an estimate would be a guess.",
 }
+
+# What each measurement being outside the monitors' range actually says about a
+# square. The mask records which measurements fell outside and on which side,
+# so a grey square can be explained by what was measured there rather than by a
+# guess at what sort of place it is.
+OUT_OF_BAND_WORDS = {
+    ("building_density_500m", "below"): "fewer mapped buildings within 500 m than at any monitor",
+    ("building_density_500m", "above"): "more mapped buildings within 500 m than at any monitor",
+    ("road_density_500m", "below"): "less road within 500 m than at any monitor",
+    ("road_density_500m", "above"): "more road within 500 m than at any monitor",
+    ("road_density_1km", "below"): "less road within 1 km than at any monitor",
+    ("road_density_1km", "above"): "more road within 1 km than at any monitor",
+    ("dist_major_road_m", "above"): "farther from a major road than any monitor",
+    ("dist_major_road_m", "below"): "closer to a major road than any monitor",
+    ("dist_industrial_m", "above"): "farther from industry than any monitor",
+    ("dist_industrial_m", "below"): "closer to industry than any monitor",
+    ("dist_coast_m", "above"): "farther inland than any monitor",
+    ("dist_coast_m", "below"): "closer to the sea than any monitor",
+}
+
+# Which measurement leads when several are outside at once. Same precedence the
+# mask kinds use: too little built form first, then distance from the traffic
+# and industry the monitors sit near.
+LEAD_ORDER = ("building_density_500m", "road_density_500m", "road_density_1km",
+              "dist_major_road_m", "dist_industrial_m", "dist_coast_m")
+
+# Why being outside that range means no number, said once.
+BAND_CONTEXT = (
+    "Every monitor stands in dense, built-up Mumbai, nearly all of them close "
+    "to traffic or industry, so the range the model was fitted on is narrow. A "
+    "square outside it is not necessarily empty ground - it is somewhere the "
+    "network holds no counterpart for, and an estimate there would be "
+    "extrapolation rather than interpolation. The building count is of mapped "
+    "footprints, which under-represent dense informal housing, so a "
+    "well-built-up area can read as sparse here.")
 
 # Time-pattern series: palette slots 1 and 2, plus different line styles so the
 # distinction never rests on colour alone.
@@ -272,6 +316,18 @@ def cell_polygons(lats, lons):
     return [[[x - dlon, y - dlat], [x + dlon, y - dlat],
              [x + dlon, y + dlat], [x - dlon, y + dlat]]
             for x, y in zip(glon.ravel(), glat.ravel())]
+
+
+def out_of_band_words(flags):
+    """What is outside the monitors' range in one cell, most telling first.
+
+    Empty when the baked mask predates the per-cell flags, which is what the
+    callers fall back to the group wording for.
+    """
+    pairs = engine().out_of_band(int(flags))
+    pairs.sort(key=lambda pair: (LEAD_ORDER.index(pair[0])
+                                 if pair[0] in LEAD_ORDER else len(LEAD_ORDER)))
+    return [OUT_OF_BAND_WORDS[pair] for pair in pairs if pair in OUT_OF_BAND_WORDS]
 
 
 def contributions(lat, lon, readings, stations, power, top_n=5):
@@ -523,6 +579,11 @@ if meta["n_stations"] == 0:
 
 flat_v, flat_s = values.ravel(), sigma.ravel()
 flat_m, flat_k = mask.ravel(), kind.ravel()
+# Which measurements put each masked cell outside the band. Defaulted rather
+# than required: a mask file baked before these existed still renders, falling
+# back to the group wording.
+flat_f = np.asarray(meta.get("mask_flags",
+                             np.zeros(flat_v.size, dtype=np.int16))).ravel()
 readings = (snap["readings"].dropna() if live_ok
             else (wide.loc[ts].dropna() if ts in wide.index
                   else pd.Series(dtype=float)))
@@ -555,10 +616,17 @@ else:
 # plain text and the structure lives in the template below.
 glon, glat = np.meshgrid(lons, lats)
 rows = []
-for v, sd, m, k in zip(flat_v, flat_s, flat_m, flat_k):
+for v, sd, m, k, f in zip(flat_v, flat_s, flat_m, flat_k, flat_f):
     aqi, cat = aqi_from_pm25(v)
     if m:
-        rows.append(("No estimate here", REASON_SHORT[int(k)], "",
+        # The measurement, not the group: the group can call a built-up
+        # neighbourhood open land, and the tooltip is where that was read.
+        words = out_of_band_words(f)
+        lead = words[0][0].upper() + words[0][1:] if words else REASON_SHORT[int(k)]
+        extra = (f"and {len(words) - 1} other measurement"
+                 f"{'s' if len(words) > 2 else ''} outside the range"
+                 if len(words) > 1 else "")
+        rows.append(("No estimate here", lead, extra,
                      "Click the square to see why"))
     else:
         rows.append((f"AQI {aqi} - {cat}", f"{v:.0f} ug/m3 PM2.5",
@@ -707,9 +775,11 @@ if explain:
              for k, n in ((1, "_empty"), (2, "_remote"), (3, "_other")) if counts[n]]
     st.markdown(" &nbsp;&nbsp; ".join(parts)
                 + "<br/><span style='color:#52514e'>Pale squares are ones we can "
-                  "estimate. The orange group is the one worth knowing about: "
-                  "ordinary neighbourhoods that simply have no monitor like "
-                  "them.</span>", unsafe_allow_html=True)
+                  "estimate. The green group is mostly sea, forest and open "
+                  "ground, but a built-up neighbourhood with fewer buildings "
+                  "than any monitor's surroundings falls in it too - click a "
+                  "square to see which measurement put it there.</span>",
+                unsafe_allow_html=True)
 elif relative:
     bar = "".join(f'<span style="display:inline-block;width:19px;height:12px;'
                   f'background:{c}"></span>' for c in DIV_LOW + [DIV_MID] + DIV_HIGH)
@@ -754,8 +824,13 @@ def cell_estimate(i, cell_lat, cell_lon):
     aqi, cat = aqi_from_pm25(v)
 
     if masked:
-        st.warning(f"**No estimate here - {REASON_SHORT[k].lower()}.**\n\n"
-                   f"{REASON_LONG[k]}")
+        words = out_of_band_words(flat_f[i])
+        if words:
+            st.warning(f"**No estimate here.** Against the 39 monitors, this "
+                       f"square has {'; '.join(words)}.\n\n{BAND_CONTEXT}")
+        else:
+            st.warning(f"**No estimate here - {REASON_SHORT[k].lower()}.**\n\n"
+                       f"{REASON_LONG[k]}")
         # A refusal alone is unhelpful, so offer the nearest real reading,
         # labelled as a reading rather than an estimate for this square.
         near, _, _ = contributions(cell_lat, cell_lon, readings, stations,
