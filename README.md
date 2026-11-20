@@ -269,6 +269,14 @@ So hourly PM2.5 has no exploitable spatial structure here, and weekly or longer 
 
 One exploratory lead, not a finding: the four near-coincident monitor pairs (some ~70 m apart) grow *less* alike as averages lengthen. That suggests some of the stable "between-place" difference is instrument or siting offset, not air.
 
+### 7. NO2 as a positive control: the control failed
+
+An expert pointed out that PM2.5 is expected to vary little across a city, while NO2, which comes from local traffic and combustion, should vary much more. If the same method found clear structure in NO2, the PM2.5 null would be shown to be real and not a blind spot. The test was [pre-registered](reports/preregistration_no2.md) before any NO2 value was looked at. It compares the two pollutants on the same 39 monitors, 35 groups and station-hours. Full results are in [`reports/no2_positive_control.md`](reports/no2_positive_control.md).
+
+![PM2.5 and NO2 on the same monitors and hours](reports/figures/no2_vs_pm25.png)
+
+**NO2 does not show clearly more structure than PM2.5, so the control failed** (pre-registered reading R4). Nearby monitors are no more alike in NO2 than distant ones (near − far −0.035, p = 0.63). IDW does not beat the city average for NO2 at 1 hour, a day or a week (−0.16% of RMSE at 1 h, interval [−0.52, +0.31]), while for PM2.5 it still does, slightly. NO2's hourly pattern is somewhat more repeatable (b2 0.25 against 0.14). That falls short of the pre-set bar of twice PM2.5's value, it disappears at a week, and an exploratory check traces most of it to four NO2 sensors that barely move. So this analysis cannot claim that the PM2.5 null is "not a blind spot". The more honest reading is that monitors 1–40 km apart cannot resolve local structure for any pollutant: NO2 near roads falls off over tens to hundreds of metres, far below this spacing. The method does register a stable difference between monitors when one exists, but at this spacing a pollutant with strong local structure and one without look the same. The data also limit the control: the NOx channel turned out to be scaled inconsistently from station to station and is reported as unusable.
+
 ## Limitations
 
 **Not all monitors report.** At the last check the live CPCB feed carried 17 of the 39 monitors. The app states how many are reporting and falls back to the most recent stored hour when the feed is unreachable.
