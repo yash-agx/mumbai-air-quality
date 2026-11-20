@@ -252,6 +252,23 @@ Gap = model RMSE − baseline RMSE in µg/m³; negative means the model wins.
 
 **What the nulls can and cannot rule out.** The six winter spells all come from one winter (December 2025–January 2026), so they are six correlated samples of one season, not six independent winters. And at four episodes — the stricter ≥ 60 µg/m³ winter definition — a signed-rank test cannot return p < 0.05 *at all*, since its smallest possible two-sided p is 0.125; that definition is reported with an interval and no p-value for exactly that reason. At 46 episodes the test would catch a 0.5 SD per-episode effect nine times in ten, so a large advantage during the worst hours is excluded; a small one is not.
 
+### 6. Does spatial structure appear at longer averaging times? Partly
+
+An outside reviewer suggested that the "no spatial structure" result might depend on averaging time: hourly noise could hide stable differences between places that only show in longer averages. The same questions were asked again at eleven averaging times, from 1 hour to the whole record. The analysis was [pre-registered](reports/preregistration_averaging_times.md), and the full table is in [`reports/averaging_times.md`](reports/averaging_times.md).
+
+![Spatial share, reliability and IDW skill against averaging time](reports/figures/averaging_time_structure.png)
+
+**Longer averages help, but much less than the noise explanation predicts, and the pre-registered verdict is mixed.**
+
+- **Reliability.** How much of one window's spatial pattern reappears in a separate window rises from 0.14 at 1 hour to 0.26 at 1 week (difference +0.12 [+0.07, +0.18]). If the hourly variation were independent noise, a week's average would have reached about 0.96. So most of what changes the map is not noise that averages away: it persists for days to weeks and then shifts.
+- **IDW skill.** IDW's edge over the city average grows from 0.5% of RMSE at 1 hour to 3.0% at 1 week (0.11 to 0.33 µg/m³; difference −2.5 pp [−4.7, −1.0]). That gain does not survive the pre-specified 50% coverage sensitivity (−0.8 pp [−3.2, +0.5]).
+- **Distance.** Nearby monitors are not detectably more alike than distant ones at any window with enough data (1 week: p = 0.16).
+- **Thin data.** The season (5 windows) and whole-record (1 window) rows look more structured, but they are too few to interpret, as fixed in advance.
+
+So hourly PM2.5 has no exploitable spatial structure here, and weekly or longer averages have a modest, real, stable component. That component is not a smooth field that interpolation between monitors 1–40 km apart can recover with confidence.
+
+One exploratory lead, not a finding: the four near-coincident monitor pairs (some ~70 m apart) grow *less* alike as averages lengthen. That suggests some of the stable "between-place" difference is instrument or siting offset, not air.
+
 ## Limitations
 
 **Not all monitors report.** At the last check the live CPCB feed carried 17 of the 39 monitors. The app states how many are reporting and falls back to the most recent stored hour when the feed is unreachable.
