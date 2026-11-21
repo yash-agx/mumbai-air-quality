@@ -31,8 +31,9 @@ cannot see local structure for any pollutant.
 
 Same 39 monitors and 35 `cv_group`s, and the **same station-hours for both
 pollutants**: an hour at a monitor is used only if both a cleaned PM2.5 and a
-cleaned NO2 reading exist (364,177 station-hours before the per-window
-coverage rule). Brackets are 95% month-cluster bootstrap intervals, 1,000
+cleaned NO2 reading exist (361,801 station-hours after cleaning both
+pollutants, before the per-window coverage rule; 364,177 before NO2
+cleaning). Brackets are 95% month-cluster bootstrap intervals, 1,000
 resamples, with the same resamples for both pollutants, so the difference
 column is a paired interval. 75% coverage, ≥ 10 monitors per window.
 
