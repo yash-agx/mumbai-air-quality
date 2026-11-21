@@ -158,11 +158,12 @@ cannot show the difference, and that NO2 shows no road signal of its own.
 ## Deviations and corrections
 
 - **Matched station-hours: 361,801, not 364,177.** The pre-registration
-  quoted 364,177 from the text of `no2_positive_control.md`. The panel used
-  here is the one in that control's own CSV (`station_hours` = 361,801 for
-  both matched panels). The two scripts build it identically. The 364,177 in
-  the control's text does not match the control's CSV, and is the number in
-  error.
+  quoted 364,177 from the text of `no2_positive_control.md`. That figure is
+  the matched count before NO2 cleaning. The panel the control analysed, and
+  the one used here, is the count after cleaning both pollutants: 361,801,
+  matching the control's CSV (`station_hours` for both matched panels). The
+  two scripts build it identically. The control report now gives both
+  figures.
 - **Reading-rule overlap.** The pre-registered table does not say which
   reading wins when both pollutants are null (L3) but the contrast interval
   lies wholly below 0 (one arm of L4). The code flags that case as an overlap
