@@ -1,0 +1,19 @@
+family,outcome,pollutant,feature,rho,p,n,p_bh,r2cv
+per-feature (pre-registered),anomaly,no2,log_dist_major_road,-0.040056,0.81691,35,0.9168,
+per-feature (pre-registered),anomaly,no2,road_density_500m,0.057983,0.73821,35,0.9168,
+per-feature (pre-registered),anomaly,pm25,log_dist_major_road,-0.11232,0.51457,35,0.9168,
+per-feature (pre-registered),anomaly,pm25,road_density_500m,0.029132,0.86426,35,0.9168,
+per-feature (pre-registered),level,no2,log_dist_major_road,-0.13053,0.45513,35,0.9168,
+per-feature (pre-registered),level,no2,road_density_500m,0.018487,0.9168,35,0.9168,
+per-feature (pre-registered),level,pm25,log_dist_major_road,-0.15182,0.37893,35,0.9168,
+per-feature (pre-registered),level,pm25,road_density_500m,-0.12829,0.45978,35,0.9168,
+exploratory: six-feature model,anomaly,no2,all six,,0.72046,35,,-0.32062
+exploratory: other features,anomaly,no2,road_density_1km,0.091317,0.59868,35,,
+exploratory: other features,anomaly,no2,dist_coast_m,-0.17031,0.33133,35,,
+exploratory: other features,anomaly,no2,dist_industrial_m,-0.028994,0.86823,35,,
+exploratory: other features,anomaly,no2,building_density_500m,0.16919,0.33073,35,,
+exploratory: six-feature model,anomaly,pm25,all six,,0.72286,35,,-0.33433
+exploratory: other features,anomaly,pm25,road_density_1km,0.044538,0.80484,35,,
+exploratory: other features,anomaly,pm25,dist_coast_m,0.13782,0.42112,35,,
+exploratory: other features,anomaly,pm25,dist_industrial_m,-0.0096645,0.95301,35,,
+exploratory: other features,anomaly,pm25,building_density_500m,0.11513,0.5147,35,,
