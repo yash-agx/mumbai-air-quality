@@ -220,3 +220,148 @@ To be committed on its own after the data are in hand and before
 - match distance per monitor;
 - what the satellite product's documentation says about its training stations
   and period.
+
+---
+
+## Addendum 1 — 2026-11-25 (data fixed; no test run)
+
+Written after the monitor data were assembled and **before
+`scripts/15_satellite_vs_monitors.py` exists or any test has been run.**
+Everything below is availability only. Nothing above this addendum is changed.
+
+### Source and window
+
+**Option 1: 2024 hourly PM2.5 from the CPCB CCR portal, against the 2024
+satellite file.** OpenAQ has no 2024 PM2.5 for any panel location (see the
+top of this file), and CCR does hold 2024 records for most in-box stations.
+The window is **IST calendar year 2024, 366 days.**
+
+- **Files:** one manual CCR export per station, 1-hour averaging, in
+  `data/raw/cpcb_2024/` (gitignored, like all raw data). The columns used are
+  `Timestamp` and `PM2.5 (µg/m³)`.
+- **Loader:** `data/load_cpcb_2024.py`. Each file is matched to a panel
+  station by the name in its filename. Panel ids, coordinates and
+  `cv_group`s are used, since the exports carry no coordinates. Rows go
+  through `clean()` from `data/clean.py` unchanged, then
+  `data/fetch_2024.py::daily_means` (IST days, ≥ 18 cleaned hours). The
+  output is `data/interim/monitors_2024_daily.parquet`.
+- **Timestamps:** CCR stamps whole IST hours, taken as the **start** of each
+  hour. `clean()` floors timestamps to the UTC hour, which moves IST-hour
+  readings 30 minutes earlier. The same shift applies to every station, so
+  each rule in `clean()` sees the same hours. `daily_means` adds the
+  30 minutes back when it assigns IST days, so each IST day holds hours
+  00:00–23:00.
+- **Duplicate guard:** the loader drops every file whose PM2.5 series is
+  identical to another file's. The first exports for Khindipada-Bhandup
+  West (CCR 5397) and Chakala-Andheri East (CCR 5399) were byte-identical.
+  Both were downloaded again. The new 5397 export is a different series, and
+  the new 5399 export is identical to the earlier one. So the earlier 5399
+  file was genuine and the earlier 5397 file was the copy. The final files
+  are all distinct.
+- **Values seen:** while checking the column format, the first four hourly
+  PM2.5 values of two files (Kurla, Powai; 2024-01-01 00:00–03:00) were
+  displayed. No other value, summary or distribution has been looked at, for
+  either dataset.
+
+### Which stations
+
+Of the 31 in-box panel monitors:
+
+- **21 have usable 2024 data**, in **19 `cv_group`s**.
+- **9 have no 2024 data on CCR:** CSIA T2, Mahape, Bhayandar West, CBD
+  Belapur, Kasarvadavali, Kopripada-Vashi, Pimpleshwar Mandir, Sanpada and
+  Upvan Fort.
+- **Bandra Kurla Complex - IITM (3409328) has a CCR file with 0 PM2.5
+  hours.** Its group, `bandra_east`, is represented by Kherwadi_Bandra East
+  alone.
+
+The 8 panel monitors outside the satellite box were not downloaded.
+
+Cleaning (`clean()`, unchanged): 193,248 rows in, 156,059 out.
+- −36,673 null
+- −1 saturation
+- −114 lone spikes
+- −401 stuck-run hours
+- 0 QA-flagged (CCR exports carry no flag), 0 out of range, 0 duplicate hours
+
+### Coverage per station
+
+Days = IST days with ≥ 18 cleaned hours, of 366. Match distance = monitor to
+the centre of its nearest land cell.
+
+| station | id | group | days | first – last | cleaned hours | match (m) |
+|---|---|---|---:|---|---:|---:|
+| Byculla - BMC | 3409510 | 3409510 | 349 | 01-01 – 12-31 | 8,456 | 423 |
+| Kherwadi_Bandra East - MPCB | 3409486 | bandra_east | 348 | 01-02 – 12-31 | 8,501 | 582 |
+| Ghatkopar - BMC | 3409514 | 3409514 | 343 | 01-01 – 12-31 | 8,299 | 423 |
+| Bandra Kurla Complex - MPCB | 3409482 | 3409482 | 340 | 01-01 – 12-31 | 8,368 | 505 |
+| Powai - MPCB | 6956 | 6956 | 337 | 01-01 – 12-31 | 8,396 | 589 |
+| Mulund West - MPCB | 12040 | 12040 | 336 | 01-01 – 12-31 | 8,169 | 591 |
+| Chembur - MPCB | 3409483 | 3409483 | 336 | 01-01 – 12-31 | 8,274 | 621 |
+| Sion - MPCB | 6967 | 6967 | 334 | 01-01 – 12-31 | 8,215 | 587 |
+| Mindspace-Malad West - MPCB | 3409479 | 3409479 | 333 | 01-01 – 12-31 | 8,066 | 241 |
+| Khindipada-Bhandup West - IITM | 12039 | 12039 | 331 | 01-01 – 12-31 | 8,140 | 520 |
+| Kandivali West - BMC | 3409512 | 3409512 | 326 | 01-01 – 12-31 | 8,019 | 495 |
+| Borivali East - MPCB | 6965 | borivali_east | 326 | 01-01 – 12-30 | 8,097 | 540 |
+| Worli - MPCB | 3409323 | worli | 319 | 01-01 – 12-30 | 7,963 | 499 |
+| Kurla - MPCB | 6945 | 6945 | 307 | 01-01 – 12-30 | 7,948 | 430 |
+| Sewri - BMC | 3409513 | 3409513 | 301 | 01-01 – 12-31 | 7,583 | 344 |
+| Borivali East - IITM | 11606 | borivali_east | 299 | 01-01 – 12-31 | 7,387 | 290 |
+| Malad West - IITM | 11611 | 11611 | 242 | 01-01 – 12-31 | 5,974 | 388 |
+| Shivaji Nagar - BMC | 3409511 | 3409511 | 233 | 01-01 – 12-31 | 5,854 | 357 |
+| Deonar - IITM | 3409329 | 3409329 | 202 | 01-23 – 12-27 | 5,175 | 321 |
+| Siddharth Nagar-Worli - IITM | 6959 | worli | 193 | 01-01 – 12-31 | 5,098 | 632 |
+| Chakala-Andheri East - IITM | 12024 | 12024 | 166 | 01-01 – 07-07 | 4,077 | 121 |
+
+Total: 6,301 station-days. Siddharth Nagar-Worli's nearest grid cell is sea
+(see above), so its match is the nearest land cell, 632 m away. Chakala-Andheri
+East has no valid day after 2024-07-07, so it has no data for the winter
+season.
+
+### Coverage per group and the confirmatory minimum
+
+A group-day exists if any member monitor has a valid day.
+
+| group | monitors | days |
+|---|---:|---:|
+| borivali_east | 2 | 363 |
+| worli | 2 | 355 |
+| 3409510 | 1 | 349 |
+| bandra_east | 1 | 348 |
+| 3409514 | 1 | 343 |
+| 3409482 | 1 | 340 |
+| 6956 | 1 | 337 |
+| 12040 | 1 | 336 |
+| 3409483 | 1 | 336 |
+| 6967 | 1 | 334 |
+| 3409479 | 1 | 333 |
+| 12039 | 1 | 331 |
+| 3409512 | 1 | 326 |
+| 6945 | 1 | 307 |
+| 3409513 | 1 | 301 |
+| 11611 | 1 | 242 |
+| 3409511 | 1 | 233 |
+| 3409329 | 1 | 202 |
+| 12024 | 1 | 166 |
+
+- **Groups per day:** median 16, range 12–19.
+- **Kept days (≥ 10 groups):** **366 of 366.** That is 5,882 group-days,
+  with every month complete.
+- **Groups with ≥ 60 kept days:** **19** (minimum 15).
+- **Kept days:** 366 (minimum 120).
+- **The confirmatory minimum is met**, so H1–H3 are scored as written.
+
+With every day kept, the month bootstrap resamples all 12 calendar months of
+2024.
+
+### Training stations of the satellite product: unresolved
+
+The satellite files (`Rf2_PM2.5_2024-MM-DD ALOK.nc`) carry no global or
+variable metadata beyond fill values. No published description of this
+product, its predictors, its training stations or its training years was
+found. **Whether these 21 monitors' 2024 records were used to train or
+calibrate the field is therefore unknown.** Under the caveat fixed above,
+an H3 pass is described as **consistency between the two datasets, not
+independent validation**. The same applies to any H3b agreement. If
+documentation turns up later, what it says is added as a further addendum,
+and the scoring rules do not change.
