@@ -4,7 +4,7 @@ Interactive map of PM2.5 across the Mumbai metropolitan region, interpolating be
 
 **Live app:** https://mumbai-air-quality.streamlit.app\
 **Repository:** https://github.com/yash-agx/mumbai-air-quality\
-Usage: 10,483 unique visitors as of 22 Nov 2026 (screenshot: [reports/figures/visitors_2026-11-22.png](reports/figures/visitors_2026-11-22.png))
+Usage: 10,000+ unique users as of 22 Nov 2026 (screenshot: [reports/figures/visitors_2026-11-22.png](reports/figures/visitors_2026-11-22.png))
 
 ![The dashboard: interpolated PM2.5 surface over the Mumbai region, monitor locations, and the mask over areas the model will not estimate](reports/figures/app.png)
 
@@ -367,6 +367,14 @@ model/interpolate.py       IDW / kriging / trees, spatial CV, predict_surface
 reports/preregistration_2026-11.md   what the breeze round promised to do
 reports/preregistration_2026-11b_episodes.md   and the episode round
 ```
+
+## Acknowledgements
+
+Daily satellite-derived PM2.5 data for 2024 were shared by Prof. Sagnik Dey's group at IIT Delhi.
+
+## References
+
+Katoch, V., Kumar, A., Imam, F., Sarkar, D., Knibbs, L. D., Liu, Y., Ganguly, D., & Dey, S. (2023). Addressing Biases in Ambient PM2.5 Exposure and Associated Health Burden Estimates by Filling Satellite AOD Retrieval Gaps over India. *Environmental Science & Technology*, 57(48), 19190–19201. https://doi.org/10.1021/acs.est.3c03355
 
 ## Notes
 

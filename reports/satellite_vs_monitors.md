@@ -40,7 +40,7 @@ b2 interval reaches below 0.30, and it misses "counts against" because the
 interval also reaches above 0.30 and A clears 3 µg/m³. H3 is read as
 **consistency, not validation**. Whether these monitors' 2024 records were
 used to train the satellite product is unresolved (Addendum 1), so H3 cannot
-show independent skill.
+show independent skill. (See the note dated 27 Nov 2026 below.)
 
 ## H1: spatial structure in the satellite field
 
@@ -170,3 +170,27 @@ smoothed field (exploratory).
 - The two same-group monitor pairs (Borivali East MPCB/IITM, Worli
   MPCB/Siddharth Nagar) have very dissimilar daily anomalies (pooled
   1 − γ = −1.26). That rests on two pairs only and is exploratory.
+
+## Note added 27 Nov 2026 (after the analysis)
+
+This note was received after the analysis was run and scored. It does not
+change any result, score or threshold above.
+
+Per correspondence with Prof. Sagnik Dey's group (IIT Delhi), the Rf2
+product was trained and validated on CPCB ground stations across India
+(70:30 train/validation split, year-round). H3 agreement is therefore
+consistency, not independent validation. Whether these specific Mumbai
+monitors were in the training or validation subsets is unknown.
+
+## Acknowledgements
+
+Daily satellite-derived PM2.5 data for 2024 were shared by Prof. Sagnik
+Dey's group at IIT Delhi.
+
+## References
+
+Katoch, V., Kumar, A., Imam, F., Sarkar, D., Knibbs, L. D., Liu, Y.,
+Ganguly, D., & Dey, S. (2023). Addressing Biases in Ambient PM2.5
+Exposure and Associated Health Burden Estimates by Filling Satellite AOD
+Retrieval Gaps over India. *Environmental Science & Technology*, 57(48),
+19190–19201. https://doi.org/10.1021/acs.est.3c03355
