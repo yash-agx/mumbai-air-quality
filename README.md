@@ -4,7 +4,7 @@ Interactive map of PM2.5 across the Mumbai metropolitan region, interpolating be
 
 **Live app:** https://mumbai-air-quality.streamlit.app\
 **Repository:** https://github.com/yash-agx/mumbai-air-quality\
-Usage: 10,000+ unique users as of 22 Nov 2026 (screenshot: [reports/figures/visitors_2026-11-22.png](reports/figures/visitors_2026-11-22.png))
+Usage: 10,000+ unique users as of 27 Nov 2026 (screenshot: [reports/figures/visitors_2026-11-27.png](reports/figures/visitors_2026-11-27.png))
 
 ![The dashboard: interpolated PM2.5 surface over the Mumbai region, monitor locations, and the mask over areas the model will not estimate](reports/figures/app.png)
 
